@@ -27,6 +27,13 @@ from hebbian_trace.tasks import (
     tokenize_question,
     FactType,
 )
+from hebbian_trace.rag_baselines import (
+    RAGStore,
+    OracleRAGStore,
+    TFIDFRAGStore,
+    EmbeddingRAGStore,
+    run_rag_multisession,
+)
 
 
 # -- Terminal Colors --
@@ -108,6 +115,7 @@ def run_demo(
     erase_lr: float = 5.0,
     seed: int = 42,
     weights_path: str = "weights/trace_module.pt",
+    rag_comparison: bool = False,
 ):
     # Device
     if torch.cuda.is_available():
@@ -305,6 +313,80 @@ def run_demo(
                   f"{n_episodes} episodes)", C.BOLD + C.GREEN))
     print(colored("=" * 65, C.BOLD))
 
+    # RAG comparison
+    if rag_comparison:
+        print()
+        print(colored("=" * 65, C.BOLD))
+        print(colored("  RAG Baseline Comparison", C.BOLD + C.CYAN))
+        print(colored("=" * 65, C.BOLD))
+        print()
+
+        wte_weight = model.gpt2.transformer.wte.weight.detach().cpu()
+        rag_variants: list[tuple[str, RAGStore]] = [
+            ("Oracle", OracleRAGStore(tokenizer)),
+            ("Embed", EmbeddingRAGStore(tokenizer, wte_weight)),
+            ("TF-IDF", TFIDFRAGStore(tokenizer)),
+        ]
+
+        rag_cached: dict[str, tuple[dict, dict]] = {}
+        for rag_name, rag_store in rag_variants:
+            print(colored(f"  Running RAG-{rag_name}...", C.DIM))
+            rag_sr, rag_ret = run_rag_multisession(
+                model, rag_store, fact_types, tokenizer, entity_ids,
+                n_sessions=n_sessions,
+                facts_per_session=facts_per_session,
+                n_episodes=n_episodes,
+                seed=seed,
+            )
+
+            print(colored(f"\n  RAG-{rag_name} Results:", C.BOLD))
+            print(colored("-" * 65, C.DIM))
+            print(colored(f"  {'Sess':>4}  {'Known':>5}  {'Overall':>8}  "
+                          f"{'New':>8}  {'Old':>8}  {'Update':>8}", C.BOLD))
+            print(colored("-" * 65, C.DIM))
+
+            for s in range(n_sessions):
+                sr = rag_sr[s]
+                n_known = sum(len(new_schedule[i]) for i in range(s + 1))
+                overall = sr["correct"] / max(sr["total"], 1)
+                new_acc = sr["new_c"] / max(sr["new_t"], 1) if sr["new_t"] else float('nan')
+                old_acc = sr["old_c"] / max(sr["old_t"], 1) if sr["old_t"] else float('nan')
+                upd_acc = sr["upd_c"] / max(sr["upd_t"], 1) if sr["upd_t"] else float('nan')
+
+                overall_s = colored(f"{overall:>7.0%}",
+                                    C.GREEN if overall >= 0.95 else
+                                    (C.YELLOW if overall >= 0.80 else C.RED))
+
+                def fmt(v):
+                    if v != v:
+                        return colored(f"{'--':>7}", C.DIM)
+                    return f"{v:>7.0%}"
+
+                print(f"  {s+1:>4}  {n_known:>5}  {overall_s}  "
+                      f"{fmt(new_acc)}  {fmt(old_acc)}  {fmt(upd_acc)}")
+
+            print(colored("-" * 65, C.DIM))
+
+            rag_final = rag_sr[n_sessions - 1]
+            rag_final_acc = rag_final["correct"] / max(rag_final["total"], 1)
+            print(f"  Final: {rag_final_acc:.0%}")
+            print()
+
+            rag_cached[rag_name] = (rag_ret, rag_sr)
+
+        # Comparative summary
+        print(colored("=" * 65, C.BOLD))
+        print(colored("  Comparison Summary (Final Session)", C.BOLD))
+        print(colored("-" * 65, C.DIM))
+        print(f"  {'Method':<20} {'Final Recall':>12}")
+        print(colored("-" * 65, C.DIM))
+        print(colored(f"  {'Hebbian Trace':<20} {final_acc:>11.0%}", C.GREEN))
+        for rag_name, (_, rag_session_results) in rag_cached.items():
+            rag_final = rag_session_results[n_sessions - 1]
+            rag_acc = rag_final["correct"] / max(rag_final["total"], 1)
+            print(f"  {'RAG-' + rag_name:<20} {rag_acc:>11.0%}")
+        print(colored("-" * 65, C.DIM))
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -320,6 +402,8 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--weights", type=str, default="weights/trace_module.pt",
                         help="Path to trace module weights")
+    parser.add_argument("--rag-comparison", action="store_true",
+                        help="Run RAG baselines for comparison")
     args = parser.parse_args()
 
     run_demo(
@@ -329,6 +413,7 @@ def main():
         erase_lr=args.erase_lr,
         seed=args.seed,
         weights_path=args.weights,
+        rag_comparison=args.rag_comparison,
     )
 
 

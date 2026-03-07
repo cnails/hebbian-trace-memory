@@ -317,9 +317,88 @@ def generate_architecture_diagram():
     print(f"Saved {path}")
 
 
+def generate_rag_comparison():
+    """Side-by-side comparison: 7 types (easy) vs 24 types (hard).
+
+    Results from evaluate.py (50 episodes, seed=42).
+    """
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
+
+    # -- Panel A: 7 base types (97 entity candidates) --
+    n_facts_7 = [1, 3, 5, 7]
+    trace_7 = [1.00, 0.893, 0.868, 0.826]
+    rag_7 = [1.00, 0.947, 0.940, 0.966]
+    in_ctx_7 = [1.00, 0.720, 0.612, 0.597]
+    no_mem_7 = [0.060, 0.027, 0.032, 0.060]
+
+    ax1.plot(n_facts_7, trace_7, 'o-', color='#2563eb', linewidth=2.5,
+             markersize=9, label='Hebbian Trace', zorder=3)
+    ax1.plot(n_facts_7, rag_7, 's-', color='#7c3aed', linewidth=2,
+             markersize=7, label='RAG (k=1)', zorder=2)
+    ax1.plot(n_facts_7, in_ctx_7, '^-', color='#f59e0b', linewidth=2,
+             markersize=7, label='In-context (all facts)', zorder=2)
+    ax1.plot(n_facts_7, no_mem_7, 'x--', color='#9ca3af', linewidth=1.5,
+             markersize=6, label='No memory', zorder=1)
+
+    ax1.fill_between(n_facts_7, no_mem_7, trace_7, alpha=0.06, color='#2563eb')
+    ax1.set_xlabel('Number of Facts', fontsize=12)
+    ax1.set_ylabel('Accuracy', fontsize=12)
+    ax1.set_title('(A) 7 Types, 97 Entity Candidates\n(Easy retrieval regime)',
+                  fontsize=12, fontweight='bold')
+    ax1.set_xticks(n_facts_7)
+    ax1.set_ylim(-0.02, 1.12)
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    ax1.legend(loc='lower left', fontsize=9)
+    ax1.grid(True, alpha=0.3)
+
+    # -- Panel B: 24 extended types (229 entity candidates) --
+    n_facts_24 = [1, 3, 5, 7, 12, 18, 24]
+    trace_24 = [1.00, 0.860, 0.832, 0.800, 0.730, 0.702, 0.668]
+    rag_24 = [0.580, 0.647, 0.600, 0.537, 0.590, 0.579, 0.617]
+    in_ctx_24 = [0.580, 0.340, 0.312, 0.217, 0.152, 0.153, 0.147]
+    no_mem_24 = [0.040, 0.020, 0.028, 0.031, 0.028, 0.021, 0.025]
+
+    ax2.plot(n_facts_24, trace_24, 'o-', color='#2563eb', linewidth=2.5,
+             markersize=9, label='Hebbian Trace', zorder=3)
+    ax2.plot(n_facts_24, rag_24, 's-', color='#7c3aed', linewidth=2,
+             markersize=7, label='RAG (k=1)', zorder=2)
+    ax2.plot(n_facts_24, in_ctx_24, '^-', color='#f59e0b', linewidth=2,
+             markersize=7, label='In-context (all facts)', zorder=2)
+    ax2.plot(n_facts_24, no_mem_24, 'x--', color='#9ca3af', linewidth=1.5,
+             markersize=6, label='No memory', zorder=1)
+
+    ax2.fill_between(n_facts_24, rag_24, trace_24, alpha=0.1, color='#2563eb',
+                     label='Trace advantage')
+    ax2.set_xlabel('Number of Facts', fontsize=12)
+    ax2.set_title('(B) 24 Types, 229 Entity Candidates\n(Realistic regime)',
+                  fontsize=12, fontweight='bold')
+    ax2.set_xticks(n_facts_24)
+    ax2.set_ylim(-0.02, 1.12)
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    ax2.legend(loc='upper right', fontsize=9)
+    ax2.grid(True, alpha=0.3)
+
+    # Annotation on panel B
+    ax2.annotate('Trace: 100%\nRAG: 58%\n(+42pp)',
+                 xy=(1, 1.00), xytext=(3, 0.95),
+                 fontsize=9, color='#2563eb', fontweight='bold',
+                 arrowprops=dict(arrowstyle='->', color='#2563eb', lw=1.2))
+
+    fig.suptitle('Hebbian Trace vs RAG Baselines: Effect of Entity Vocabulary Size',
+                 fontsize=14, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+    path = os.path.join(FIGURES_DIR, 'rag_comparison.png')
+    plt.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved {path}")
+
+
 if __name__ == "__main__":
     generate_retention_curve()
     generate_ablation_chart()
     generate_cross_context_table()
     generate_architecture_diagram()
+    generate_rag_comparison()
     print("\nAll figures generated.")
