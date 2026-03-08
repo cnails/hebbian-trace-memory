@@ -423,10 +423,12 @@ class GPT2WithTrace(nn.Module):
 
     def __init__(self, n_trace_heads: int = 8, d_trace: int = 64,
                  alpha: float = 0.1, trace_lr: float = 0.1,
-                 trace_decay: float = 0.99, device: str | None = None):
+                 trace_decay: float = 0.99,
+                 model_name: str = 'gpt2',
+                 device: str | None = None):
         super().__init__()
 
-        self.gpt2 = GPT2LMHeadModel.from_pretrained('gpt2')
+        self.gpt2 = GPT2LMHeadModel.from_pretrained(model_name)
         self.gpt2.requires_grad_(False)
         self.gpt2.eval()
 
