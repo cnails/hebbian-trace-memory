@@ -8,17 +8,19 @@ An external memory module (~1.1M parameters) that attaches to a frozen GPT-2 (12
 
 ## Flagship Result
 
-**99% recall across 15 sessions with 24 distinct fact types.**
+**98% recall across 15 sessions with 24 distinct fact types.**
 
-The trace module accumulates knowledge session by session. Facts stored in session 1 remain perfectly retrievable at session 15, even as new facts are added and existing ones are updated.
+The trace module accumulates knowledge session by session. Facts stored in session 1 remain retrievable at session 15, even as new facts are added and existing ones are updated.
 
 <p align="center">
-  <img src="figures/retention_curve.png" width="700" alt="Retention curve: 99% recall across 15 sessions">
+  <img src="figures/retention_curve.png" width="700" alt="Retention curve: 98% recall across 15 sessions">
 </p>
 
 | Property | Value |
 |----------|-------|
-| Recall at session 15 | **99%** |
+| Mean recall across sessions | **98.6%** |
+| Session 15 recall (all 24 facts) | **98%** |
+| Single-pass recall at n=24 | 94.4% (CI: 92.3–96.5%) |
 | Fact types | 24 (name, city, company, color, food, pet, ...) |
 | Sessions | 15 (introduction + updates) |
 | Base model | GPT-2 Small (frozen, unmodified) |
@@ -62,6 +64,8 @@ First run downloads GPT-2 Small (~500MB). Subsequent runs use the cached model.
 ```bash
 python evaluate.py                # 50 episodes (quick, ~5 min)
 python evaluate.py --n-eval 100   # 100 episodes (paper results)
+python exp_lama.py --quick        # LAMA benchmark (~2 min)
+python exp_lama.py --n-eval 100   # LAMA full run (~10 min)
 ```
 
 ### Multi-Session Demo
@@ -103,6 +107,48 @@ Each mechanism contributes independently:
   <img src="figures/ablation_chart.png" width="600" alt="Component ablation">
 </p>
 
+### Capacity Stress Test
+
+How many facts can the trace store before accuracy degrades?
+
+<p align="center">
+  <img src="figures/capacity_curve.png" width="600" alt="Capacity stress test">
+</p>
+
+Pattern separation extends the capacity frontier by ~2x: 95% accuracy at ~31 facts, 80% at ~48 facts.
+
+### RAG Comparison
+
+<p align="center">
+  <img src="figures/rag_comparison.png" width="700" alt="Hebbian Trace vs RAG baselines">
+</p>
+
+In the realistic regime (24 types, 229 entity candidates), the trace outperforms RAG (k=1) by up to +42pp at n=1.
+
+### Model Scaling
+
+The trace mechanism generalizes from GPT-2 Small (124M) to GPT-2 Medium (355M):
+
+<p align="center">
+  <img src="figures/model_scaling.png" width="700" alt="Model scaling: Small vs Medium">
+</p>
+
+### LAMA Knowledge Probes
+
+Evaluation on the standard LAMA T-REx benchmark (Petroni et al., 2019) with real-world Wikidata facts:
+
+| n_facts | Cross-context (trace) | In-context (GPT-2) | No memory |
+|---------|:--------------------:|:-----------------:|:---------:|
+| 1 | **100.0%** | 95.0% | 1.0% |
+| 3 | **94.0%** | 43.3% | 0.3% |
+| 5 | **93.6%** | 41.6% | 0.2% |
+| 7 | **88.7%** | 29.7% | 0.3% |
+| 10 | **81.2%** | 24.7% | 0.1% |
+
+The trace exceeds GPT-2's in-context baseline by +50–60pp at n>=3. Coverage is limited to ~6% of LAMA T-REx due to the single-token entity constraint.
+
+*100 episodes, seed=42. Reproducible via `python exp_lama.py --n-eval 100`.*
+
 ### Multi-Session Capacity (24 fact types, 15 sessions)
 
 | Session | Known Facts | Overall | New | Old | Update |
@@ -134,14 +180,21 @@ hebbian-trace-memory/
 │   └── tasks.py           # Fact types, evaluation infrastructure
 ├── demo.py                # Multi-session demo
 ├── evaluate.py            # Reproduce paper results
+├── exp_lama.py            # LAMA T-REx benchmark evaluation
+├── capacity_test.py       # Capacity stress test (1–100 facts)
 ├── weights/
-│   └── trace_module.pt   # Trained gate weights (~6KB)
+│   └── trace_module.pt    # Trained gate weights (~6KB)
 ├── figures/
 │   ├── generate.py        # Reproducible figure generation
 │   ├── architecture.png
 │   ├── retention_curve.png
 │   ├── ablation_chart.png
-│   └── cross_context.png
+│   ├── cross_context.png
+│   ├── capacity_curve.png
+│   ├── rag_comparison.png
+│   └── model_scaling.png
+├── paper.tex              # LaTeX paper (arXiv-ready)
+├── references.bib         # BibTeX references
 ├── ARCHITECTURE.md        # Detailed component descriptions
 ├── requirements.txt       # torch, transformers
 └── LICENSE                # Apache 2.0
@@ -161,11 +214,11 @@ hebbian-trace-memory/
 ## Citation
 
 ```bibtex
-@article{hebbian-trace-memory,
-  title={Persistent Cross-Session Memory for Frozen Language Models via Bio-Inspired Hebbian Trace Module},
-  author={Andrey Pustovit},
+@article{pustovit2026hebbian,
+  title={Persistent Memory for Frozen Language Models via Bio-Inspired Hebbian Trace},
+  author={Pustovit, Andrey},
   year={2026},
-  note={Preprint}
+  note={arXiv preprint}
 }
 ```
 
