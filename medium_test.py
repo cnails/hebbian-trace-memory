@@ -17,6 +17,7 @@ Usage:
 import argparse
 import time
 
+import numpy as np
 import torch
 from transformers import GPT2Tokenizer
 
@@ -85,10 +86,25 @@ def run_test(model_name: str = 'gpt2-medium', n_eval: int = 50,
     # Evaluate
     n_facts_list = [1, 3, 5, 7]
 
-    print("-" * 70)
-    print(f"  {'n':>3}  {'Cross+Trace':>13}  {'In-context':>12}  "
-          f"{'No-trace':>10}  {'Gap':>8}  {'Time':>6}")
-    print("-" * 70)
+    def _ci(per_ep):
+        arr = np.array(per_ep)
+        if len(arr) <= 1:
+            return arr[0], arr[0]
+        rng = np.random.RandomState(0)
+        boots = np.array([arr[rng.randint(0, len(arr), len(arr))].mean()
+                          for _ in range(10000)])
+        return float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))
+
+    def _fmt(r):
+        lo, hi = _ci(r.per_episode_acc)
+        return f"{r.accuracy * 100:5.1f} [{lo * 100:4.1f},{hi * 100:5.1f}]"
+
+    w = 17
+    sep = "-" * (6 + 3 * (w + 2) + 10 + 8)
+    print(sep)
+    print(f"  {'n':>3}  {'Cross+Trace':>{w}}  {'In-context':>{w}}  "
+          f"{'No-trace':>{w}}  {'Gap':>8}  {'Time':>6}")
+    print(sep)
 
     for n_facts in n_facts_list:
         episodes = make_eval_episodes(
@@ -106,12 +122,13 @@ def run_test(model_name: str = 'gpt2-medium', n_eval: int = 50,
         dt = time.time() - t0
         gap = cross.accuracy - cross_bl.accuracy
 
-        print(f"  {n_facts:>3}  {cross.accuracy:>13.1%}  "
-              f"{baseline.accuracy:>12.1%}  "
-              f"{cross_bl.accuracy:>10.1%}  "
+        print(f"  {n_facts:>3}  {_fmt(cross):>{w}}  "
+              f"{_fmt(baseline):>{w}}  "
+              f"{_fmt(cross_bl):>{w}}  "
               f"{gap:>+7.1%}  {dt:>5.0f}s")
 
-    print("-" * 70)
+    print(sep)
+    print("  (values: accuracy% [95% bootstrap CI], 10,000 resamples)")
     print()
     print(f"  Model: {model_name} ({gpt2_params/1e6:.0f}M params)")
     print(f"  Trace: {trace_params:,} params ({trace_params/gpt2_params*100:.1f}% "

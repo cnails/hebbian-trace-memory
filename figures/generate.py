@@ -398,7 +398,7 @@ def generate_rag_comparison():
 def generate_capacity_curve():
     """Capacity stress test: accuracy vs number of stored facts.
 
-    Results from exp17 (20 episodes, seed=42).
+    Results from 20-episode evaluation (seed=42).
     Tests up to 100 unique fact types with auto-discovered concept words.
     """
 
@@ -465,7 +465,7 @@ def generate_capacity_curve():
 def generate_model_scaling():
     """GPT-2 Small vs Medium: trace mechanism generalizes across model sizes.
 
-    Results from exp18 (50 episodes, seed=42).
+    Results from 50-episode evaluation (seed=42).
     Both models: PS 8x_k16, trace_lr=1.0, decay=0.99.
     Alpha auto-tuned: Small=0.5, Medium=1.0.
     """

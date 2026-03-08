@@ -14,9 +14,9 @@ Usage:
 """
 
 import argparse
-import math
 import time
 
+import numpy as np
 import torch
 from transformers import GPT2Tokenizer
 
@@ -40,20 +40,40 @@ from hebbian_trace.rag_baselines import (
 )
 
 
-def _std(per_episode_acc: list[float]) -> float:
-    """Compute standard deviation from per-episode accuracies."""
-    n = len(per_episode_acc)
+def bootstrap_ci(per_episode_acc: list[float], n_boot: int = 10000,
+                  ci: float = 0.95, seed: int = 0) -> tuple[float, float]:
+    """95% bootstrap confidence interval for mean accuracy.
+
+    Args:
+        per_episode_acc: per-episode accuracy values.
+        n_boot: number of bootstrap resamples.
+        ci: confidence level (default 0.95).
+        seed: random seed for reproducibility.
+
+    Returns:
+        (lo, hi) bounds of the CI.
+    """
+    arr = np.array(per_episode_acc)
+    n = len(arr)
     if n <= 1:
-        return 0.0
-    mean = sum(per_episode_acc) / n
-    variance = sum((x - mean) ** 2 for x in per_episode_acc) / (n - 1)
-    return math.sqrt(variance)
+        return (arr[0] if n == 1 else 0.0, arr[0] if n == 1 else 0.0)
+
+    rng = np.random.RandomState(seed)
+    boot_means = np.empty(n_boot)
+    for i in range(n_boot):
+        sample = arr[rng.randint(0, n, size=n)]
+        boot_means[i] = sample.mean()
+
+    alpha = (1 - ci) / 2
+    lo = float(np.percentile(boot_means, 100 * alpha))
+    hi = float(np.percentile(boot_means, 100 * (1 - alpha)))
+    return (lo, hi)
 
 
 def _fmt(result) -> str:
-    """Format EvalResults as 'acc±std' (percentage points)."""
-    s = _std(result.per_episode_acc)
-    return f"{result.accuracy * 100:5.1f}±{s * 100:4.1f}"
+    """Format EvalResults as 'acc [lo, hi]' with 95% bootstrap CI."""
+    lo, hi = bootstrap_ci(result.per_episode_acc)
+    return f"{result.accuracy * 100:5.1f} [{lo * 100:4.1f},{hi * 100:5.1f}]"
 
 
 def _run_table(model, fact_types, tokenizer, wte_weight,
@@ -69,12 +89,13 @@ def _run_table(model, fact_types, tokenizer, wte_weight,
           f"{len(entity_ids)} entity candidates, "
           f"{n_eval} episodes")
     print()
-    w = 11  # column width for acc±std
-    print("-" * 90)
+    w = 17  # column width for 'acc [lo, hi]'
+    sep = "-" * (6 + 6 * (w + 2))
+    print(sep)
     print(f"  {'n':>3}  {'Trace':>{w}}  {'In-ctx':>{w}}  "
           f"{'RAG-Orc':>{w}}  {'RAG-Emb':>{w}}  {'RAG-TF':>{w}}  "
           f"{'No-trace':>{w}}")
-    print("-" * 90)
+    print(sep)
 
     for n_facts in n_facts_list:
         if n_facts > len(fact_types):
@@ -108,8 +129,8 @@ def _run_table(model, fact_types, tokenizer, wte_weight,
               f"{_fmt(rag_tfidf):>{w}}  "
               f"{_fmt(cross_bl):>{w}}")
 
-    print("-" * 90)
-    print("  (values: accuracy% ± std% across episodes)")
+    print(sep)
+    print("  (values: accuracy% [95% bootstrap CI], 10,000 resamples)")
     print()
 
 
