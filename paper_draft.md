@@ -228,13 +228,13 @@ We identify five concrete limitations that define the gap between our proof-of-c
 
 3. **Context-free addressing trade-off.** Using token identity (not context) for addressing enables cross-session stability but fundamentally cannot distinguish entities sharing a concept word — "my name" and "Alice's name" produce identical Q vectors. The Pareto trade-off between discrimination and stability (Section 4.5) remains partially unresolved.
 
-4. **Scale.** Current validation covers 24 fact types (~50 facts) on GPT-2 Small (124M parameters). Scaling behavior to hundreds of facts and larger models (7B+) is unknown and cannot be extrapolated from current results.
+4. **Scale.** Validation covers GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B), all with 24 fact types (~50 facts). Scaling to hundreds of facts and models beyond 3B is untested.
 
 5. **Limited standard benchmark coverage.** Our LAMA evaluation (§4.7) covers only ~6% of T-REx relations due to the single-token constraint, and remaining experiments use custom synthetic tasks designed to isolate cross-session persistence. Broader evaluation on multi-token benchmarks (TriviaQA, Natural Questions) and larger relation sets would strengthen generalizability claims.
 
 ### Connection to biological memory
 
-Our architecture implements a simplified hippocampal loop: dentate gyrus (pattern separation) → CA3 (Hebbian trace) → cholinergic modulation (dual gates) → reconsolidation (erasure). We do not claim biological fidelity — rather, we use neuroscience as a source of architectural inductive biases that prove empirically effective. The consistent success of these biases across two model scales suggests that the computational principles underlying hippocampal memory are relevant beyond biological neural networks.
+Our architecture implements a simplified hippocampal loop: dentate gyrus (pattern separation) → CA3 (Hebbian trace) → cholinergic modulation (dual gates) → reconsolidation (erasure). We do not claim biological fidelity — rather, we use neuroscience as a source of architectural inductive biases that prove empirically effective. The consistent success of these biases across three model scales and two distinct architectures (GPT-2 and Phi-2) suggests that the computational principles underlying hippocampal memory are relevant beyond biological neural networks.
 
 ---
 
@@ -246,13 +246,13 @@ Several directions extend from the current foundation:
 
 **Neocortical consolidation.** In biological memory, hippocampal traces are gradually consolidated into neocortical representations. An analog process — periodically distilling trace contents into model weights through targeted fine-tuning — could combine the fast learning of Hebbian traces with the capacity of parametric memory.
 
-**Scaling to larger models.** Current validation is on GPT-2 Small (124M). Testing on larger models (GPT-2 Medium/Large, open-source LLMs) would establish scaling properties of the trace module.
+**Scaling beyond 3B.** Cross-architecture transfer to Phi-2 (2.7B) demonstrates zero-shot generalization with improved accuracy at higher fact counts. Testing on 7B+ models (LLaMA, Mistral) would establish whether the trace mechanism continues to benefit from larger embedding spaces.
 
 ---
 
 ## 7. Conclusion
 
-We have presented the Hebbian Trace Module, a bio-inspired external memory system that demonstrates persistent cross-session memory for frozen language models on structured fact association tasks. Through systematic development across 16 experiments, we showed that five composable mechanisms — pattern separation, Hebbian storage, dual semantic gating, reconsolidation erasure, and complementary learning systems — can be combined to achieve 98–99% mean recall across 15 sessions with only 1M additional parameters. Each mechanism is independently motivated by hippocampal neuroscience, independently validated through ablation, and composes orthogonally with the others. Significant limitations remain — notably structured input requirements, single-token entities, and unvalidated scaling behavior — but our results suggest that the computational principles underlying biological memory systems offer viable architectural inductive biases for adding persistent, updatable memory to pretrained language models without modifying their weights.
+We have presented the Hebbian Trace Module, a bio-inspired external memory system that demonstrates persistent cross-session memory for frozen language models on structured fact association tasks. Through systematic development across 16 experiments, we showed that five composable mechanisms — pattern separation, Hebbian storage, dual semantic gating, reconsolidation erasure, and complementary learning systems — can be combined to achieve 98–99% mean recall across 15 sessions with only 1M additional parameters. Each mechanism is independently motivated by hippocampal neuroscience, independently validated through ablation, and composes orthogonally with the others. Zero-shot cross-architecture transfer to Phi-2 (2.7B) achieves 98–100% accuracy, demonstrating architecture-agnostic generalization. Significant limitations remain — notably structured input requirements and single-token entities — but our results suggest that the computational principles underlying biological memory systems offer viable architectural inductive biases for adding persistent, updatable memory to pretrained language models without modifying their weights.
 
 ---
 

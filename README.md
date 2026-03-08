@@ -2,7 +2,7 @@
 
 **Persistent cross-session memory for frozen LLMs via bio-inspired Hebbian trace module.**
 
-An external memory module (~1.1M parameters) that attaches to a frozen GPT-2 (124M parameters) and provides persistent fact storage across sessions — without fine-tuning, without RAG, without retraining.
+An external memory module (~1.1M parameters) that attaches to frozen LLMs and provides persistent fact storage across sessions — without fine-tuning, without RAG, without retraining. Validated on GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B).
 
 ---
 
@@ -24,6 +24,7 @@ The trace module accumulates knowledge session by session. Facts stored in sessi
 | Fact types | 24 (name, city, company, color, food, pet, ...) |
 | Sessions | 15 (introduction + updates) |
 | Base model | GPT-2 Small (frozen, unmodified) |
+| Cross-architecture | Phi-2 (2.7B): 98.4% at n=5 (zero-shot) |
 | Trainable parameters | ~1.1M (trace module only) |
 | Fine-tuning required | None |
 
@@ -132,6 +133,21 @@ The trace mechanism generalizes from GPT-2 Small (124M) to GPT-2 Medium (355M):
 <p align="center">
   <img src="figures/model_scaling.png" width="700" alt="Model scaling: Small vs Medium">
 </p>
+
+### Cross-Architecture Transfer: Phi-2 (2.7B)
+
+Zero-shot transfer to Microsoft Phi-2 — a completely different architecture (parallel attention, rotary embeddings, CodeGen tokenizer). No trained weights loaded, only random projections + linking-token mask.
+
+| n_facts | GPT-2 Small (124M) | Phi-2 (2.7B) | Delta | Phi-2 in-context |
+|---------|:------------------:|:------------:|:-----:|:----------------:|
+| 1 | 100.0% | **100.0%** | 0.0 | 98.0% |
+| 3 | 100.0% | **99.3%** | −0.7 | 83.3% |
+| 5 | 90.4% | **98.4%** | **+8.0** | 94.4% |
+| 7 | 85.7% | **92.9%** | **+7.1** | 97.4% |
+
+Phi-2 **exceeds GPT-2 Small** at n≥5. Trace params = 5.3M (0.19% of Phi-2).
+
+*50 episodes, pattern separation 8x_k16, seed=42.*
 
 ### LAMA Knowledge Probes
 
