@@ -67,7 +67,7 @@ def generate_retention_curve():
     ax.grid(True, alpha=0.3)
 
     # Key stat annotation
-    ax.annotate('99% recall\nat session 15',
+    ax.annotate('98% recall\nat session 15',
                 xy=(15, 0.98), xytext=(12.5, 0.82),
                 fontsize=12, fontweight='bold', color='#2563eb',
                 arrowprops=dict(arrowstyle='->', color='#2563eb', lw=1.5))
