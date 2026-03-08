@@ -17,6 +17,12 @@ env/
 # Allow shipped weights
 !weights/trace_module.pt
 
+# Downloaded datasets
+data/
+
+# Evaluation results (regenerable)
+results/
+
 .DS_Store
 Thumbs.db
 
