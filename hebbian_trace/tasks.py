@@ -1,7 +1,8 @@
 """Fact types, entity pools, and evaluation infrastructure.
 
 Provides structured fact templates with BPE-validated single-token entities,
-episode generation for evaluation, and three evaluation modes:
+episode generation for evaluation, concept vocabulary for direct write,
+multi-hop chain support, and three evaluation modes:
   - baseline: in-context (facts + question), no trace
   - cross_context: trace-only retrieval (THE REAL TEST)
   - cross_context_baseline: no trace, question-only (lower bound)
@@ -500,6 +501,162 @@ def evaluate_cross_context(
         n_correct=total_correct, n_total=total_queries,
         per_episode_acc=per_episode,
     )
+
+
+# -- Concept Vocabulary (for direct write) --
+
+# Maps fact type name -> concept word used for Q addressing
+# These are the words at position (link_pos - 1) in shift-1 mechanism
+CONCEPT_WORD_MAP: dict[str, str] = {
+    "name": "name",
+    "city": "live",
+    "company": "work",
+    "color": "color",
+    "food": "food",
+    "pet": "pet",
+    "country": "country",
+}
+
+
+@dataclass
+class ConceptEntry:
+    """A concept type with its addressing word and entity pool."""
+    type_name: str
+    concept_word: str
+    concept_token_id: int
+    fact_template: str
+    question_template: str
+    entity_pool: list[tuple[str, int]]  # (name, bpe_id)
+
+
+def build_concept_vocab(
+    tokenizer: GPT2Tokenizer,
+) -> dict[str, ConceptEntry]:
+    """Build concept vocabulary: type_name -> ConceptEntry.
+
+    Each entry maps a fact type to its concept word (the Q-addressing
+    token used in direct write) and validated entity pool.
+    Includes 7 base + 17 extended = 24 types.
+    """
+    entries: dict[str, ConceptEntry] = {}
+
+    # Base 7 types
+    base_defs = [
+        ("name", "name", "My name is {X}.", "What is my name?", NAMES),
+        ("city", "live", "I live in {X}.", "Where do I live?", CITIES),
+        ("company", "work", "I work at {X}.", "Where do I work?", COMPANIES),
+        ("color", "color", "My favorite color is {X}.",
+         "What is my favorite color?", COLORS),
+        ("food", "food", "My favorite food is {X}.",
+         "What is my favorite food?", FOODS),
+        ("pet", "pet", "My pet is {X}.", "What is my pet?", PETS),
+        ("country", "country", "My country is {X}.",
+         "What is my country?", COUNTRIES),
+    ]
+
+    for type_name, cword, fact_t, q_t, pool in base_defs:
+        cw_ids = tokenizer.encode(" " + cword, add_special_tokens=False)
+        if len(cw_ids) != 1:
+            continue
+        entities = validate_single_token_entities(tokenizer, pool)
+        if len(entities) >= 4:
+            entries[type_name] = ConceptEntry(
+                type_name=type_name,
+                concept_word=cword,
+                concept_token_id=cw_ids[0],
+                fact_template=fact_t,
+                question_template=q_t,
+                entity_pool=entities,
+            )
+
+    # Extended types (same concept word = type name)
+    for type_name, (pool, fact_t, link_w, q_t) in EXTRA_POOLS.items():
+        cw_ids = tokenizer.encode(" " + type_name, add_special_tokens=False)
+        if len(cw_ids) != 1:
+            continue
+        entities = validate_single_token_entities(tokenizer, pool)
+        if len(entities) >= 4:
+            entries[type_name] = ConceptEntry(
+                type_name=type_name,
+                concept_word=type_name,
+                concept_token_id=cw_ids[0],
+                fact_template=fact_t,
+                question_template=q_t,
+                entity_pool=entities,
+            )
+
+    return entries
+
+
+# -- Multi-Hop Chain Data --
+
+# Validated city->country pairs (both single-token BPE)
+CITY_COUNTRY_PAIRS = [
+    ("Moscow", "Russia"),
+    ("Paris", "France"),
+    ("Tokyo", "Japan"),
+    ("Berlin", "Germany"),
+    ("Cairo", "Egypt"),
+    ("Toronto", "Canada"),
+    ("Mumbai", "India"),
+    ("Rome", "Italy"),
+    ("Oslo", "Norway"),
+    ("Lima", "Peru"),
+    ("Athens", "Greece"),
+]
+
+
+@dataclass
+class ChainEntry:
+    """A city->country chain pair with validated token IDs."""
+    city: str
+    country: str
+    city_token_id: int
+    country_token_id: int
+
+
+def build_chain_entries(
+    tokenizer: GPT2Tokenizer,
+) -> list[ChainEntry]:
+    """Build validated city->country chain pairs for multi-hop."""
+    entries = []
+    for city, country in CITY_COUNTRY_PAIRS:
+        city_ids = tokenizer.encode(" " + city, add_special_tokens=False)
+        country_ids = tokenizer.encode(" " + country, add_special_tokens=False)
+        if len(city_ids) == 1 and len(country_ids) == 1:
+            entries.append(ChainEntry(
+                city=city, country=country,
+                city_token_id=city_ids[0],
+                country_token_id=country_ids[0],
+            ))
+    return entries
+
+
+# -- T_auto Paraphrase Pairs --
+
+# Maps variant query word -> canonical concept word
+# Used to populate T_auto for pattern completion
+TAUTO_PAIRS = [
+    # Misaligned: shifted template position
+    ("I", "name"),
+    ("called", "name"),
+    ("Call", "name"),
+    ("home", "live"),
+    ("reside", "live"),
+    ("employed", "work"),
+    ("hired", "work"),
+    # Semantic: entirely different phrasing
+    ("title", "name"),
+    ("identity", "name"),
+    ("residence", "live"),
+    ("employer", "work"),
+    ("occupation", "work"),
+    ("hue", "color"),
+    ("shade", "color"),
+    ("cuisine", "food"),
+    ("dish", "food"),
+    ("companion", "pet"),
+]
 
 
 def evaluate_cross_context_baseline(

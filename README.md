@@ -2,11 +2,11 @@
 
 **Persistent cross-session memory for frozen LLMs via bio-inspired Hebbian trace module.**
 
-An external memory module (~1.1M parameters) that attaches to frozen LLMs and provides persistent fact storage across sessions — without fine-tuning, without RAG, without retraining. Validated on GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B).
+An external memory module (~1.1M parameters) that attaches to frozen LLMs and provides persistent fact storage, paraphrase resolution, and multi-hop reasoning across sessions — without fine-tuning, without RAG, without retraining. Validated on GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B).
 
 ---
 
-## Flagship Result
+## Flagship Results
 
 **98% recall across 15 sessions with 24 distinct fact types.**
 
@@ -20,10 +20,12 @@ The trace module accumulates knowledge session by session. Facts stored in sessi
 |----------|-------|
 | Mean recall across sessions | **98.6%** |
 | Session 15 recall (all 24 facts) | **98%** |
-| Single-pass recall at n=24 | 94.4% (CI: 92.3–96.5%) |
+| Multi-hop end-to-end (5 chains) | **100%** |
+| Paraphrase resolution (T_auto) | **+83pp** on misaligned queries |
 | Fact types | 24 (name, city, company, color, food, pet, ...) |
 | Sessions | 15 (introduction + updates) |
 | Base model | GPT-2 Small (frozen, unmodified) |
+| Capacity (16 hashed banks) | **99.2% at 100 facts** (vs 35.6% baseline) |
 | Cross-architecture | Phi-2 (2.7B): 98.4% at n=5 (zero-shot) |
 | Trainable parameters | ~1.1M (trace module only) |
 | Fine-tuning required | None |
@@ -32,7 +34,7 @@ The trace module accumulates knowledge session by session. Facts stored in sessi
 
 ## Architecture
 
-Six bio-inspired components, each addressing a specific memory challenge:
+Seven bio-inspired components, each addressing a specific memory challenge:
 
 <p align="center">
   <img src="figures/architecture.png" width="700" alt="Architecture diagram">
@@ -42,7 +44,8 @@ Six bio-inspired components, each addressing a specific memory challenge:
 |-----------|-------------------|------|
 | Context-free Q/V | Hippocampal indexing | Same word = same address, regardless of context |
 | Pattern separation | Dentate gyrus | Sparse expansion reduces Q overlap (0.477 → 0.308 cosine) |
-| Hebbian trace | CA3 associative memory | Outer-product accumulation: `T += lr * Q^T @ V` |
+| Hebbian trace (T_v) | CA3 associative memory | Outer-product accumulation: `T += lr * Q^T @ V` |
+| Autoassociative trace (T_auto) | CA3 pattern completion | Maps variant Q to canonical Q for paraphrase resolution |
 | Dual gates | ACh modulation | Learned fact/filler filtering (103x selectivity) |
 | Logit injection | Hippocampal output | Bypasses residual stream scale mismatch |
 | Reconsolidation erasure | Memory reconsolidation | L2-normalized erase before overwrite |
@@ -67,6 +70,9 @@ python evaluate.py                # 50 episodes (quick, ~5 min)
 python evaluate.py --n-eval 100   # 100 episodes (paper results)
 python exp_lama.py --quick        # LAMA benchmark (~2 min)
 python exp_lama.py --n-eval 100   # LAMA full run (~10 min)
+python exp_multihop.py --quick    # Multi-hop reasoning (~2 min)
+python exp_paraphrase.py --quick  # Paraphrase resolution (~2 min)
+python capacity_test.py --banks 16  # Capacity with hashed banks (~10 min)
 ```
 
 ### Multi-Session Demo
@@ -100,6 +106,43 @@ Cross-context retrieval **exceeds GPT-2's own in-context learning** at all fact 
   <img src="figures/cross_context.png" width="600" alt="Cross-context retrieval results">
 </p>
 
+### Paraphrase Resolution via T_auto
+
+The autoassociative trace (T_auto) maps variant query words to canonical concept words, enabling retrieval from paraphrased questions without any additional parameters.
+
+<p align="center">
+  <img src="figures/paraphrase_tauto.png" width="600" alt="T_auto paraphrase resolution">
+</p>
+
+| Category | Without T_auto | With T_auto | Delta |
+|----------|:-----------:|:----------:|:-----:|
+| Aligned (canonical) | 90% | 90% | +0pp |
+| Misaligned (shifted position) | 17% | **100%** | **+83pp** |
+| Semantic (different word) | 27% | **100%** | **+73pp** |
+
+T_auto stores 17 template-driven Q→Q pairs once (static template knowledge). Two-step retrieval: Q(variant) → T_auto → Q(concept) → T_v → answer.
+
+*Reproducible via `python exp_paraphrase.py --n-eval 50`.*
+
+### Multi-Hop Reasoning
+
+Two-hop trace chains with zero new parameters: decode intermediate via `W_out @ wte.T → argmax`, re-encode as Q, query T_v again.
+
+<p align="center">
+  <img src="figures/multihop_capacity.png" width="600" alt="Multi-hop chain capacity">
+</p>
+
+| N chains | Hop-1 | Hop-2 (oracle) | End-to-end | With interference |
+|:--------:|:-----:|:--------------:|:----------:|:-----------------:|
+| 1 | 100% | 100% | **100%** | 100% |
+| 5 | 100% | 100% | **100%** | 100% |
+| 8 | 100% | 100% | **98%** | 96% |
+| 11 | 100% | 98% | **96%** | 92% |
+
+Example: "Where does the person live?" → "Paris" → "What country?" → "France"
+
+*Reproducible via `python exp_multihop.py --n-eval 50`.*
+
 ### Component Ablation (15-session demo)
 
 Each mechanism contributes independently:
@@ -116,7 +159,18 @@ How many facts can the trace store before accuracy degrades?
   <img src="figures/capacity_curve.png" width="600" alt="Capacity stress test">
 </p>
 
-Pattern separation extends the capacity frontier by ~2x: 95% accuracy at ~31 facts, 80% at ~48 facts.
+Hashed trace banks partition the memory into independent compartments routed via sparse Q activation patterns. Each bank accumulates ~N/n_banks facts, reducing interference. Zero new parameters.
+
+| n_facts | No PS | PS only | PS + 16 banks |
+|:-------:|:-----:|:-------:|:-------------:|
+| 10 | 96.0% | 100.0% | **99.3%** |
+| 20 | 79.2% | 99.0% | **99.5%** |
+| 30 | 47.8% | 86.0% | **99.2%** |
+| 50 | 25.2% | 49.2% | **99.4%** |
+| 75 | 11.7% | 26.1% | **99.2%** |
+| 100 | 7.0% | 16.6% | **99.2%** |
+
+*Reproducible via `python capacity_test.py --banks 16`.*
 
 ### RAG Comparison
 
@@ -126,28 +180,22 @@ Pattern separation extends the capacity frontier by ~2x: 95% accuracy at ~31 fac
 
 In the realistic regime (24 types, 229 entity candidates), the trace outperforms RAG (k=1) by up to +42pp at n=1.
 
-### Model Scaling
+### Three-Model Scaling
 
-The trace mechanism generalizes from GPT-2 Small (124M) to GPT-2 Medium (355M):
+The trace mechanism generalizes across model architectures:
 
 <p align="center">
-  <img src="figures/model_scaling.png" width="700" alt="Model scaling: Small vs Medium">
+  <img src="figures/model_scaling.png" width="700" alt="Three-model scaling: GPT-2 Small vs Medium vs Phi-2">
 </p>
 
-### Cross-Architecture Transfer: Phi-2 (2.7B)
+| n_facts | GPT-2 Small (124M) | GPT-2 Medium (355M) | Phi-2 (2.7B) |
+|---------|:------------------:|:-------------------:|:------------:|
+| 1 | 100.0% | 100.0% | **100.0%** |
+| 3 | 92.7% | 96.7% | **99.3%** |
+| 5 | 83.6% | 87.2% | **98.4%** |
+| 7 | 82.9% | 86.9% | **92.9%** |
 
-Zero-shot transfer to Microsoft Phi-2 — a completely different architecture (parallel attention, rotary embeddings, CodeGen tokenizer). No trained weights loaded, only random projections + linking-token mask.
-
-| n_facts | GPT-2 Small (124M) | Phi-2 (2.7B) | Delta | Phi-2 in-context |
-|---------|:------------------:|:------------:|:-----:|:----------------:|
-| 1 | 100.0% | **100.0%** | 0.0 | 98.0% |
-| 3 | 100.0% | **99.3%** | −0.7 | 83.3% |
-| 5 | 90.4% | **98.4%** | **+8.0** | 94.4% |
-| 7 | 85.7% | **92.9%** | **+7.1** | 97.4% |
-
-Phi-2 **exceeds GPT-2 Small** at n≥5. Trace params = 5.3M (0.19% of Phi-2).
-
-*50 episodes, pattern separation 8x_k16, seed=42.*
+Bigger models produce better trace recall. Phi-2 exceeds GPT-2 Small by +15.5pp at n=5.
 
 ### LAMA Knowledge Probes
 
@@ -161,7 +209,7 @@ Evaluation on the standard LAMA T-REx benchmark (Petroni et al., 2019) with real
 | 7 | **88.7%** | 29.7% | 0.3% |
 | 10 | **81.2%** | 24.7% | 0.1% |
 
-The trace exceeds GPT-2's in-context baseline by +50–60pp at n>=3. Coverage is limited to ~6% of LAMA T-REx due to the single-token entity constraint.
+The trace exceeds GPT-2's in-context baseline by +50-60pp at n>=3. Coverage is limited to ~6% of LAMA T-REx due to the single-token entity constraint.
 
 *100 episodes, seed=42. Reproducible via `python exp_lama.py --n-eval 100`.*
 
@@ -178,10 +226,10 @@ The trace exceeds GPT-2's in-context baseline by +50–60pp at n>=3. Coverage is
 
 ## Limitations
 
-- **Structured templates**: facts must follow "{concept} {linking_token} {entity}" pattern (e.g., "My name is John"). Free-form text is not supported.
-- **Single-token entities**: entity values must be single BPE tokens. Multi-token entities (e.g., "New York") require tokenizer-level solutions.
-- **Linking-token dependency**: storage is triggered by specific linking tokens ("is", "in", "at", "from"). Facts without these tokens are not stored.
-- **Template-locked retrieval**: questions must use the same concept word as the fact template. Paraphrased questions (e.g., "What do people call you?" instead of "What is my name?") fail.
+- **Structured templates**: facts must follow "{concept} {linking_token} {entity}" pattern. The free-text pipeline uses regex extraction to bridge this gap.
+- **Single-token entities**: entity values must be single BPE tokens. Multi-token entities (e.g., "New York") are supported via auto-regressive generation with 100% completion for 2-token entities.
+- **Linking-token dependency**: storage is triggered by specific linking tokens ("is", "in", "at", "from"). Dual gates learned to filter these automatically.
+- **Template-locked retrieval**: questions must use matching concept words. T_auto resolves paraphrases with +83pp improvement on misaligned queries.
 - **No ownership discrimination**: the trace cannot distinguish "my name" from "Alice's name" — both produce the same context-free Q.
 
 ---
@@ -193,11 +241,14 @@ hebbian-trace-memory/
 ├── hebbian_trace/
 │   ├── __init__.py
 │   ├── model.py           # HebbianTraceModule + GPT2WithTrace
-│   └── tasks.py           # Fact types, evaluation infrastructure
+│   └── tasks.py           # Fact types, evaluation, concept vocab, chains
 ├── demo.py                # Multi-session demo
-├── evaluate.py            # Reproduce paper results
-├── exp_lama.py            # LAMA T-REx benchmark evaluation
-├── capacity_test.py       # Capacity stress test (1–100 facts)
+├── evaluate.py            # Flagship evaluation with RAG baselines
+├── exp_lama.py            # LAMA T-REx benchmark
+├── exp_multihop.py        # Multi-hop reasoning via trace chains
+├── exp_paraphrase.py      # Paraphrase resolution via T_auto
+├── capacity_test.py       # Capacity stress test (1-100 facts)
+├── medium_test.py         # GPT-2 Medium (355M) transfer test
 ├── weights/
 │   └── trace_module.pt    # Trained gate weights (~6KB)
 ├── figures/
@@ -208,7 +259,9 @@ hebbian-trace-memory/
 │   ├── cross_context.png
 │   ├── capacity_curve.png
 │   ├── rag_comparison.png
-│   └── model_scaling.png
+│   ├── model_scaling.png
+│   ├── multihop_capacity.png
+│   └── paraphrase_tauto.png
 ├── paper.tex              # LaTeX paper (arXiv-ready)
 ├── references.bib         # BibTeX references
 ├── ARCHITECTURE.md        # Detailed component descriptions

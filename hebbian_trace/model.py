@@ -1,13 +1,14 @@
 """Hebbian Trace Memory for frozen pretrained transformers.
 
-External memory module (~1.1M parameters) that attaches to a frozen GPT-2
-and provides persistent cross-session fact storage via bio-inspired
-Hebbian trace learning.
+External memory module (~1.1M parameters) that attaches to a frozen LLM
+and provides persistent cross-session fact storage, paraphrase resolution,
+and multi-hop reasoning via bio-inspired Hebbian trace learning.
 
 Architecture:
     Q = W_proj(LN(wte(token)))           -- context-free storage keys
     V = W_val(wte(token))                -- context-free values
-    Trace: T_v (H, d_addr, d_trace)      -- Hebbian association matrix
+    T_v (H, d_addr, d_trace)             -- heteroassociative trace (Q->V)
+    T_auto (H, d_addr, d_trace)          -- autoassociative trace (Q->Q)
     Retrieved: W_out(Q_addr @ T_v)       -- projected back to d_model
     Injection: logits += alpha * (retrieved @ wte.T)
 
@@ -15,7 +16,9 @@ Biological analogies:
     Pattern separation (dentate gyrus):  sparse random expansion of Q
     Dual gates (ACh modulation):         learned fact/filler filtering
     Reconsolidation erasure:             selective overwrite for updates
-    Linking-token mask:                  hippocampal indexing
+    Autoassociative trace (CA3):         paraphrase -> concept mapping
+    Multi-hop chains:                    entity-as-concept addressing
+    Replay (sharp-wave ripples):         sleep-phase trace strengthening
 """
 
 import math
@@ -90,6 +93,20 @@ class HebbianTraceModule(nn.Module):
         self._erase_before_write = False
         self._erase_lr = 1.0
 
+        # Trace banks (hash-routed memory for capacity scaling)
+        self.n_trace_banks = 1
+        self._bank_traces: torch.Tensor | None = None
+
+        # Autoassociative trace (T_auto) for pattern completion
+        self.register_buffer(
+            'autoassociative_traces', torch.zeros(n_heads, d_trace, d_trace))
+        self._auto_enabled = False
+        self._completion_alpha = 0.3
+
+        # Replay buffer
+        self._replay_enabled = False
+        self._replay_buffer: list[torch.Tensor] = []
+
         self._init_orthogonal()
 
     def _init_orthogonal(self):
@@ -127,6 +144,102 @@ class HebbianTraceModule(nn.Module):
         V = V.view(B, S, self.n_heads, self.d_trace).permute(0, 2, 1, 3)
 
         return Q, V
+
+    def compute_q_for_token(self, wte: nn.Embedding,
+                             token_id: int) -> torch.Tensor:
+        """Compute base Q vector for a single token.
+
+        Context-free: same token always produces the same Q.
+        Used for direct write/read operations.
+
+        Args:
+            wte: token embedding layer.
+            token_id: BPE token ID.
+
+        Returns:
+            Q: (H, d_trace)
+        """
+        with torch.no_grad():
+            tok_embed = wte(torch.tensor(
+                [[token_id]], device=self.value_traces.device)).float()
+        Q = self.W_proj(self.ln_proj(tok_embed))
+        Q = Q.view(self.n_heads, self.d_trace)
+        return Q
+
+    def compute_v_for_token(self, wte: nn.Embedding,
+                             token_id: int) -> torch.Tensor:
+        """Compute V vector for a single token.
+
+        Args:
+            wte: token embedding layer.
+            token_id: BPE token ID.
+
+        Returns:
+            V: (H, d_trace)
+        """
+        with torch.no_grad():
+            tok_embed = wte(torch.tensor(
+                [[token_id]], device=self.value_traces.device)).float()
+        V = self.W_val(tok_embed)
+        V = V.view(self.n_heads, self.d_trace)
+        return V
+
+    @torch.no_grad()
+    def write_direct(self, Q: torch.Tensor, V: torch.Tensor):
+        """Write a single Q->V association directly to trace.
+
+        Bypasses template/shift machinery. Used by write_fact_direct
+        and for multi-hop chain link storage.
+
+        Args:
+            Q: (H, d_trace) storage key
+            V: (H, d_trace) storage value
+        """
+        H = self.n_heads
+        denom = 1 * H
+
+        if self._pattern_sep_enabled:
+            Q_exp = self._sparse_expand(Q.unsqueeze(0).unsqueeze(2))
+            Q_store = Q_exp.squeeze(0).squeeze(1)
+        else:
+            Q_store = Q
+
+        trace, bank_id = self._resolve_trace(Q_store)
+
+        if self._erase_before_write:
+            Q_norms = Q_store.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            Q_erase = Q_store / Q_norms
+            V_old = torch.einsum('hp,hpq->hq', Q_erase, trace)
+            erase = torch.einsum('hp,hq->hpq', Q_erase, V_old) / denom
+            trace = trace - self._erase_lr * erase
+
+        update = torch.einsum('hp,hq->hpq', Q_store, V) / denom
+        self._commit_trace(self.trace_decay * trace + self.trace_lr * update,
+                           bank_id)
+
+    @torch.no_grad()
+    def read_direct(self, Q: torch.Tensor) -> torch.Tensor:
+        """Read from T_v using a single pre-computed Q, no shift.
+
+        Unlike read() which applies shift-1 for sequence-level retrieval,
+        this does direct Q @ T_v for single-token lookups (multi-hop chains).
+
+        Args:
+            Q: (H, d_trace) query vector from compute_q_for_token
+
+        Returns:
+            retrieved: (d_model,) value projected to model space
+        """
+        if self._pattern_sep_enabled:
+            Q_exp = self._sparse_expand(Q.unsqueeze(0).unsqueeze(2))
+            Q_addr = Q_exp.squeeze(0).squeeze(1)
+        else:
+            Q_addr = Q
+
+        trace, _ = self._resolve_trace(Q_addr)
+        V_ret = torch.einsum('hp,hpq->hq', Q_addr, trace)
+        V_flat = V_ret.view(1, self.n_heads * self.d_trace)
+        return self.W_out(V_flat).squeeze(0)
 
     def _make_linking_mask(self, token_slice: torch.Tensor) -> torch.Tensor:
         """Create boolean mask for linking token positions."""
@@ -169,20 +282,22 @@ class HebbianTraceModule(nn.Module):
         if self._pattern_sep_enabled:
             Q_store = self._sparse_expand(Q_store)
 
+        trace, bank_id = self._resolve_trace(Q_store)
+
         if self._erase_before_write:
             Q_norms = Q_store.norm(dim=-1, keepdim=True).clamp(min=1e-8)
             Q_erase = Q_store / Q_norms
             V_old = torch.einsum(
-                'bhip,hpq->bhiq', Q_erase, self.value_traces)
+                'bhip,hpq->bhiq', Q_erase, trace)
             erase = torch.einsum(
                 'bhip,bhiq->hpq', Q_erase, V_old) / denom
-            self.value_traces = self.value_traces - self._erase_lr * erase
+            trace = trace - self._erase_lr * erase
 
         v_update = torch.einsum('bhip,bhiq->hpq', Q_store, V_store)
         v_update = v_update / denom
 
-        self.value_traces = (self.trace_decay * self.value_traces
-                             + self.trace_lr * v_update)
+        self._commit_trace(self.trace_decay * trace + self.trace_lr * v_update,
+                           bank_id)
 
     def read(self, Q: torch.Tensor) -> torch.Tensor:
         """Retrieve from trace: V_ret = Q_addr @ T_v.
@@ -206,15 +321,13 @@ class HebbianTraceModule(nn.Module):
         if self._pattern_sep_enabled:
             Q_addr = self._sparse_expand(Q_addr)
 
-        Tv = self.value_traces.unsqueeze(0)
+        # Bank routing: use last position's Q (prediction target)
+        trace, _ = self._resolve_trace(Q_addr[:, :, -1:, :])
+        Tv = trace.unsqueeze(0)
         V_ret = torch.matmul(Q_addr, Tv)
 
         V_ret = V_ret.permute(0, 2, 1, 3).reshape(B, S, H * d_trace)
         return self.W_out(V_ret)
-
-    def reset_traces(self):
-        """Zero all trace matrices."""
-        self.value_traces.zero_()
 
     def set_erase_mode(self, enabled: bool, erase_lr: float = 1.0):
         """Toggle reconsolidation erasure for fact updates.
@@ -385,6 +498,20 @@ class HebbianTraceModule(nn.Module):
             self.n_heads, self._expanded_dim, self.d_trace,
             device=self.value_traces.device, dtype=self.value_traces.dtype)
 
+        # T_auto also uses expanded Q addressing
+        self.autoassociative_traces = torch.zeros(
+            self.n_heads, self._expanded_dim, self.d_trace,
+            device=self.autoassociative_traces.device,
+            dtype=self.autoassociative_traces.dtype)
+
+        # Resize bank traces if active
+        if self._bank_traces is not None:
+            self._bank_traces = torch.zeros(
+                self.n_trace_banks, self.n_heads,
+                self._expanded_dim, self.d_trace,
+                device=self._bank_traces.device,
+                dtype=self._bank_traces.dtype)
+
     def disable_pattern_separation(self):
         """Disable sparse expansion, restore standard trace shape."""
         self._pattern_sep_enabled = False
@@ -396,6 +523,12 @@ class HebbianTraceModule(nn.Module):
             self.n_heads, self.d_trace, self.d_trace,
             device=self.value_traces.device, dtype=self.value_traces.dtype)
 
+        # Reset T_auto to match
+        self.autoassociative_traces = torch.zeros(
+            self.n_heads, self.d_trace, self.d_trace,
+            device=self.autoassociative_traces.device,
+            dtype=self.autoassociative_traces.dtype)
+
     def _sparse_expand(self, Q: torch.Tensor) -> torch.Tensor:
         """Project Q through frozen expansion + ReLU + top-k."""
         Q_exp = torch.matmul(Q, self.W_expand)
@@ -406,6 +539,190 @@ class HebbianTraceModule(nn.Module):
             Q_sparse.scatter_(-1, topk_idx, topk_vals)
             return Q_sparse
         return Q_exp
+
+    # -- Trace Banks (Hash-Routed Memory) --
+
+    def set_bank_mode(self, n_banks: int):
+        """Enable hash-routed trace banks for capacity scaling.
+
+        Routes each fact to one of n_banks separate trace matrices based
+        on the sparse Q activation pattern (argmax of expanded dims).
+        Each bank accumulates only ~N/n_banks facts, reducing interference.
+        Decay is applied only to the written bank, preserving signal in others.
+
+        Args:
+            n_banks: number of trace banks. 1 = disabled (standard single trace).
+        """
+        self.n_trace_banks = n_banks
+        if n_banks > 1:
+            exp_dim = self._expanded_dim if self._pattern_sep_enabled \
+                else self.d_trace
+            self._bank_traces = torch.zeros(
+                n_banks, self.n_heads, exp_dim, self.d_trace,
+                device=self.value_traces.device,
+                dtype=self.value_traces.dtype)
+        else:
+            self._bank_traces = None
+
+    def _compute_bank_id(self, Q_sparse: torch.Tensor) -> int:
+        """Route sparse Q to a trace bank via argmax hash.
+
+        Uses the index of the dominant expanded dimension (summed across
+        all batch/head/position dims) as a hash key.
+
+        Args:
+            Q_sparse: (..., expanded_dim) sparse Q after expansion.
+
+        Returns:
+            bank_id: int in [0, n_trace_banks).
+        """
+        flat = Q_sparse.reshape(-1, Q_sparse.shape[-1])
+        activity = flat.abs().sum(dim=0)
+        return activity.argmax().item() % self.n_trace_banks
+
+    def _resolve_trace(self, Q_sparse: torch.Tensor | None = None
+                       ) -> tuple[torch.Tensor, int | None]:
+        """Get trace matrix with optional bank routing.
+
+        Returns:
+            (trace, bank_id): trace is (H, expanded_dim, d_trace),
+            bank_id is int if banking active, else None.
+        """
+        if self._bank_traces is not None and Q_sparse is not None:
+            bank_id = self._compute_bank_id(Q_sparse)
+            return self._bank_traces[bank_id], bank_id
+        return self.value_traces, None
+
+    def _commit_trace(self, trace: torch.Tensor,
+                      bank_id: int | None):
+        """Write back trace matrix after update."""
+        if bank_id is not None and self._bank_traces is not None:
+            self._bank_traces[bank_id] = trace
+        else:
+            self.value_traces = trace
+
+    # -- Autoassociative Trace (CA3 Pattern Completion) --
+
+    def set_auto_mode(self, enabled: bool, completion_alpha: float = 0.3):
+        """Enable/disable pattern completion via T_auto.
+
+        Args:
+            enabled: whether completion channel is active during read.
+            completion_alpha: strength of completion channel (optimal: 0.3).
+        """
+        self._auto_enabled = enabled
+        self._completion_alpha = completion_alpha
+
+    @torch.no_grad()
+    def write_auto(self, Q_variant: torch.Tensor, Q_concept: torch.Tensor):
+        """Write Q_variant -> Q_concept mapping in T_auto.
+
+        Stores a template pair: variant query word maps to canonical
+        concept word. For example, Q("I") -> Q("name"), Q("home") -> Q("live").
+
+        Args:
+            Q_variant: (H, d_trace) source Q
+            Q_concept: (H, d_trace) target Q
+        """
+        if self._pattern_sep_enabled:
+            Q_exp = self._sparse_expand(Q_variant.unsqueeze(0).unsqueeze(2))
+            Q_exp = Q_exp.squeeze(0).squeeze(1)
+        else:
+            Q_exp = Q_variant
+
+        update = torch.einsum('hp,hq->hpq', Q_exp, Q_concept)
+        update = update / self.n_heads
+        self.autoassociative_traces = (
+            self.autoassociative_traces + self.trace_lr * update)
+
+    def read_completion(self, Q: torch.Tensor) -> torch.Tensor:
+        """Completion channel: Q -> T_auto -> Q_corrected -> T_v -> V.
+
+        Two-step retrieval for paraphrase resolution.
+        Operates in parallel with standard read(), results summed at logit level.
+
+        Args:
+            Q: (B, H, S, d_trace) query keys
+
+        Returns:
+            output: (B, S, d_model) completion-retrieved values
+        """
+        B, H, S, d_trace = Q.shape
+
+        Q_addr = torch.cat([
+            torch.zeros_like(Q[:, :, :1, :]),
+            Q[:, :, :-1, :],
+        ], dim=2)
+
+        if self._pattern_sep_enabled:
+            Q_addr_exp = self._sparse_expand(Q_addr)
+        else:
+            Q_addr_exp = Q_addr
+
+        T_auto = self.autoassociative_traces.unsqueeze(0)
+        Q_corrected = torch.matmul(Q_addr_exp, T_auto)
+
+        if self._pattern_sep_enabled:
+            Q_corrected_exp = self._sparse_expand(Q_corrected)
+        else:
+            Q_corrected_exp = Q_corrected
+
+        Tv = self.value_traces.unsqueeze(0)
+        V_ret = torch.matmul(Q_corrected_exp, Tv)
+
+        V_ret = V_ret.permute(0, 2, 1, 3).reshape(B, S, H * d_trace)
+        return self.W_out(V_ret)
+
+    def reset_auto_traces(self):
+        """Zero autoassociative traces only."""
+        self.autoassociative_traces.zero_()
+
+    # -- Replay (Hippocampal Sharp-Wave Ripples) --
+
+    def set_replay_mode(self, enabled: bool):
+        """Enable/disable replay buffer recording during writes."""
+        self._replay_enabled = enabled
+        if not enabled:
+            self._replay_buffer.clear()
+
+    def clear_replay_buffer(self):
+        """Clear replay buffer."""
+        self._replay_buffer.clear()
+
+    @torch.no_grad()
+    def replay(self, n_replays: int = 1):
+        """Sleep-phase replay: re-activate stored Q->V associations.
+
+        Normalized replay prevents amplification: both Q and V are
+        L2-normalized before re-write. No decay during replay.
+
+        Args:
+            n_replays: number of replay iterations over the buffer.
+        """
+        if not self._replay_buffer:
+            return
+
+        H = self.n_heads
+        for _ in range(n_replays):
+            for Q_key in self._replay_buffer:
+                Q_norm = F.normalize(Q_key, dim=-1)
+                V_ret = torch.einsum('hp,hpq->hq', Q_norm, self.value_traces)
+                V_norm = F.normalize(V_ret, dim=-1)
+                update = torch.einsum('hp,hq->hpq', Q_norm, V_norm)
+                update = update / H
+                self.value_traces = self.value_traces + self.trace_lr * update
+
+    @property
+    def replay_buffer_size(self) -> int:
+        return len(self._replay_buffer)
+
+    def reset_traces(self):
+        """Zero all trace matrices (including all banks)."""
+        self.value_traces.zero_()
+        self.autoassociative_traces.zero_()
+        if self._bank_traces is not None:
+            self._bank_traces.zero_()
+        self._replay_buffer.clear()
 
 
 class GPT2WithTrace(nn.Module):
@@ -481,6 +798,14 @@ class GPT2WithTrace(nn.Module):
             trace_logits = torch.matmul(retrieved, wte.weight.T)
             logits = logits + self.trace.alpha * trace_logits
 
+            # Pattern completion channel (T_auto)
+            if self.trace._auto_enabled:
+                completed = self.trace.read_completion(trace_Q)
+                comp_logits = torch.matmul(completed, wte.weight.T)
+                logits = logits + (self.trace.alpha
+                                   * self.trace._completion_alpha
+                                   * comp_logits)
+
         return logits
 
     # -- Delegation --
@@ -509,3 +834,96 @@ class GPT2WithTrace(nn.Module):
 
     def set_dual_gate_mode(self, enabled: bool):
         self.trace.set_dual_gate_mode(enabled)
+
+    def set_auto_mode(self, enabled: bool, completion_alpha: float = 0.3):
+        self.trace.set_auto_mode(enabled, completion_alpha)
+
+    def set_bank_mode(self, n_banks: int):
+        self.trace.set_bank_mode(n_banks)
+
+    # -- Direct Write/Read (bypasses template machinery) --
+
+    @property
+    def _wte(self) -> nn.Embedding:
+        """Access frozen GPT-2 token embeddings."""
+        return self.gpt2.transformer.wte
+
+    @torch.no_grad()
+    def write_fact_direct(self, concept_token_id: int,
+                          entity_token_id: int):
+        """Write a single concept->entity fact to trace.
+
+        Bypasses template/linking-mask machinery. Used for free-text
+        extraction pipeline and multi-hop chain storage.
+
+        Args:
+            concept_token_id: BPE token ID of the concept word (Q address)
+            entity_token_id: BPE token ID of the entity (V value)
+        """
+        Q = self.trace.compute_q_for_token(self._wte, concept_token_id)
+        V = self.trace.compute_v_for_token(self._wte, entity_token_id)
+        self.trace.write_direct(Q, V)
+
+    @torch.no_grad()
+    def retrieve_direct(self, token_id: int,
+                        candidate_ids: list[int]) -> int:
+        """Direct trace retrieval: Q(token) -> T_v -> logits -> argmax.
+
+        Pure trace lookup -- no GPT-2 forward pass, no alpha scaling.
+        Used for multi-hop chains where each hop reads from trace directly.
+
+        Args:
+            token_id: BPE token whose Q addresses the trace
+            candidate_ids: restrict prediction to these token IDs
+
+        Returns:
+            predicted token ID (from candidate_ids)
+        """
+        Q = self.trace.compute_q_for_token(self._wte, token_id)
+        retrieved = self.trace.read_direct(Q)
+        wte_weight = self._wte.weight.float()
+        logits = torch.matmul(retrieved, wte_weight.T)
+        cand_logits = logits[candidate_ids]
+        return candidate_ids[cand_logits.argmax().item()]
+
+    @torch.no_grad()
+    def generate(self, input_ids: torch.Tensor,
+                 max_new_tokens: int = 4,
+                 restrict_first_to: list[int] | None = None,
+                 stop_token_ids: list[int] | None = None,
+                 ) -> torch.Tensor:
+        """Auto-regressive generation with trace-augmented logits.
+
+        Used for multi-token entity completion: trace retrieves first
+        token, GPT-2's LM head completes subsequent tokens.
+
+        Args:
+            input_ids: (B, S) prompt tokens.
+            max_new_tokens: maximum tokens to generate.
+            restrict_first_to: restrict first token to these IDs.
+            stop_token_ids: stop generation at these tokens.
+
+        Returns:
+            generated: (B, n_generated) new token IDs.
+        """
+        generated = []
+
+        for step in range(max_new_tokens):
+            logits = self.forward(input_ids)
+            next_logits = logits[:, -1, :]
+
+            if step == 0 and restrict_first_to is not None:
+                mask = torch.full_like(next_logits, float('-inf'))
+                mask[:, restrict_first_to] = 0
+                next_logits = next_logits + mask
+
+            next_token = next_logits.argmax(dim=-1, keepdim=True)
+            generated.append(next_token)
+
+            if stop_token_ids is not None:
+                if next_token.squeeze().item() in stop_token_ids:
+                    break
+
+            input_ids = torch.cat([input_ids, next_token], dim=1)
+
+        return torch.cat(generated, dim=1)

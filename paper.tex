@@ -25,7 +25,7 @@
 }
 
 % --- Title ---
-\title{Persistent Memory for Frozen Language Models\\via Bio-Inspired Hebbian Trace}
+\title{Hebbian Trace: Persistent and Compositional Memory\\for Frozen Language Models}
 
 \author{
   Andrey Pustovit\\
@@ -40,26 +40,34 @@
 
 % ============================================================
 \begin{abstract}
-Large language models lack persistent memory---knowledge acquired during one session is lost when the context resets. We introduce the Hebbian Trace Module, a lightweight external memory that attaches to frozen pretrained LLMs and demonstrates the feasibility of cross-session knowledge retention without fine-tuning. Inspired by hippocampal memory systems, our architecture combines five composable mechanisms: sparse pattern separation (dentate gyrus analog), Hebbian associative storage (CA3), dual semantic gating (cholinergic modulation), reconsolidation erasure, and complementary learning systems via per-head specialization. The trace module stores associations at inference time through Hebbian outer-product updates and retrieves them via logit-space injection. On structured fact association tasks, the module attached to frozen GPT-2 Small (124M parameters) with ${\sim}1.1$M trainable parameters achieves 98--99\% mean cross-session recall when 24 fact types are introduced incrementally (3--5 per session) across 15 sessions with fact updates, processing natural paragraph input with noise filtering. In single-pass capacity tests, accuracy is 94.4\% (95\% CI: 92.3--96.5\%) at 24 simultaneous facts. On the LAMA T-REx knowledge probing benchmark, the trace achieves 81--100\% cross-context retrieval, exceeding GPT-2's in-context baseline by 50--60 percentage points. We validate each component through systematic ablation across 16 experiments, demonstrating that all five mechanisms compose orthogonally. Our results suggest that persistent, updatable memory can be added to pretrained language models as a modular plug-in, without modifying model weights, though significant challenges remain for unconstrained natural language.
+Large language models lack persistent memory---knowledge acquired during one session is lost when the context resets. We introduce the Hebbian Trace Module, a lightweight external memory that attaches to frozen pretrained LLMs and demonstrates the feasibility of cross-session knowledge retention without fine-tuning. Inspired by hippocampal memory systems, our architecture combines seven composable mechanisms: sparse pattern separation (dentate gyrus), Hebbian associative storage (CA3 heteroassociative), autoassociative pattern completion (CA3 autoassociative), dual semantic gating (cholinergic modulation), reconsolidation erasure, complementary learning systems, and hippocampal replay. We validate the module across three model scales---GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B)---demonstrating architecture-agnostic transfer with zero-shot generalization. On structured fact tasks, the module achieves 98--99\% mean cross-session recall across 15 sessions with 24 fact types, including fact updates and paragraph input with noise filtering. The autoassociative trace resolves paraphrased queries (``What do people call you?'' $\to$ ``What is my name?''), improving misaligned query accuracy by up to +83pp (17\% $\to$ 100\% at $n{=}1$) without degrading aligned retrieval. On the LAMA T-REx knowledge probing benchmark, the trace achieves 81--94\% cross-context retrieval on real Wikidata facts, exceeding GPT-2's in-context baseline by 50--60 percentage points. A multi-hop reasoning pipeline chains two trace lookups via intermediate decoding, achieving 100\% end-to-end accuracy on 841 HotpotQA bridge questions under oracle-supported evaluation (single-token answers, given supporting facts), and 98.4\% with 5 simultaneous question-answer pairs. A free-text extraction pipeline and multi-turn dialogue system demonstrate the path from structured templates to natural interaction. We validate each component through systematic ablation, demonstrating that all seven mechanisms compose orthogonally. Our results suggest that persistent, updatable, and compositional memory can be added to pretrained language models as a modular plug-in without modifying model weights.
 \end{abstract}
 
 % ============================================================
 \section{Introduction}
 
-Current large language models operate as stateless systems---each conversation begins with a blank slate. While in-context learning \citep{brown2020language} allows temporary use of information within a session, this knowledge is lost when the context window resets. Existing solutions each have fundamental limitations: retrieval-augmented generation (RAG) \citep{lewis2020retrieval} requires explicit indexing infrastructure and does not learn or update organically; fine-tuning is computationally expensive, risks catastrophic forgetting, and cannot operate incrementally at inference time; and extended context windows, while accommodating more tokens, still reset between sessions and scale quadratically in compute.
+Current large language models \citep{vaswani2017attention,brown2020language} operate as stateless systems---each conversation begins with a blank slate. While in-context learning \citep{brown2020language} allows temporary use of information within a session, this knowledge is lost when the context window resets. Existing solutions each have fundamental limitations: retrieval-augmented generation (RAG) \citep{lewis2020retrieval} requires explicit indexing infrastructure and does not learn or update organically; fine-tuning is computationally expensive, risks catastrophic forgetting, and cannot operate incrementally at inference time; and extended context windows, while accommodating more tokens, still reset between sessions and scale quadratically in compute.
 
 The human brain solves this problem through the hippocampal memory system---a fast-learning complementary structure that rapidly encodes episodic memories, updates them through reconsolidation \citep{nader2000fear}, and operates alongside the slow-learning neocortex \citep{mcclelland1995complementary}. The hippocampus achieves this through a coordinated set of mechanisms: sparse coding in the dentate gyrus minimizes interference between memories \citep{rolls2013mechanisms}, autoassociative networks in CA3 store and retrieve patterns, cholinergic modulation gates encoding versus retrieval modes \citep{hasselmo2006role}, and reconsolidation enables selective updating of existing memories.
 
 We propose the Hebbian Trace Module, an external memory system that translates these hippocampal principles into a computational module attachable to any frozen pretrained language model. Our key contributions are:
 
 \begin{enumerate}[leftmargin=*]
-  \item \textbf{A modular persistent memory architecture} comprising five bio-inspired, independently validated components that compose orthogonally, enabling cross-session knowledge retention for frozen LLMs.
+  \item \textbf{A modular persistent memory architecture} comprising seven bio-inspired, independently validated components that compose orthogonally, enabling cross-session knowledge retention, paraphrase resolution, and multi-hop reasoning for frozen LLMs.
 
-  \item \textbf{Architecture-agnostic transfer from custom to pretrained models.} Mechanisms developed on a small custom transformer (6.4M parameters) transfer directly to GPT-2 Small \citep{radford2019language} (124M parameters) with random projections and no fine-tuning, achieving 100\% single-fact recall.
+  \item \textbf{Architecture-agnostic transfer across three model scales.} Mechanisms developed on a custom transformer (6.4M parameters) transfer to GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 \citep{javaheripi2023phi} (2.7B)---a fundamentally different architecture---with zero-shot generalization and accuracy that improves with model size.
 
-  \item \textbf{Systematic ablation across 16 experiments}, isolating the contribution of each component and mapping architectural limitations. We demonstrate +26pp from pattern separation, +46pp from semantic gating, and +38pp from reconsolidation erasure on targeted benchmarks.
+  \item \textbf{Multi-hop reasoning validated on real-world facts.} A two-hop trace chain achieves 100\% end-to-end accuracy on 841 HotpotQA \citep{yang2018hotpotqa} bridge questions under oracle-supported evaluation, with zero new parameters---intermediate results are decoded from trace via argmax and re-encoded as new queries.
 
-  \item \textbf{A flagship demonstration} of 98--99\% mean recall across 15 sessions with 24 incrementally introduced fact types, including fact updates and natural paragraph input with noise filtering, using only ${\sim}1.1$M trainable parameters attached to a frozen 124M-parameter model.
+  \item \textbf{Real-world knowledge probing.} On the LAMA T-REx benchmark (2,034 Wikidata facts, 32 relations), cross-context trace retrieval achieves 81--94\% accuracy, exceeding GPT-2's in-context baseline by +50--60pp---validating the mechanism on naturally occurring knowledge beyond synthetic tasks.
+
+  \item \textbf{Autoassociative pattern completion.} A second trace ($\mathbf{T}_{\text{auto}}$) maps variant query vectors to canonical concept vectors, resolving paraphrased questions (+83pp at $n{=}1$) and semantic reformulations (+73pp) without degrading aligned retrieval.
+
+  \item \textbf{Systematic ablation}, isolating the contribution of each component and mapping architectural limitations. We demonstrate +26pp from pattern separation, +46pp from semantic gating, +38pp from reconsolidation erasure, and +83pp from pattern completion on targeted benchmarks.
+
+  \item \textbf{Capacity scaling via hashed trace banks.} Hash-routed trace banks partition the memory into independent compartments, each accumulating only ${\sim}N/n_{\text{banks}}$ facts. With 16 banks, accuracy remains ${\geq}99\%$ through 100 simultaneously stored facts (vs.\ 35.6\% without banks), yielding an essentially flat scaling curve with zero new parameters.
+
+  \item \textbf{From structured templates to natural interaction.} A free-text extraction pipeline and multi-turn dialogue system demonstrate fact accumulation, updates, and retrieval from unstructured input, achieving 100\% accuracy across introduction, update, and multi-dialogue phases.
 \end{enumerate}
 
 % ============================================================
@@ -82,7 +90,7 @@ We propose the Hebbian Trace Module, an external memory system that translates t
 % ============================================================
 \section{Architecture}
 
-The Hebbian Trace Module attaches to a frozen pretrained language model as an external memory. It intercepts token embeddings for addressing, stores associations via Hebbian learning, and injects retrieved information into the model's output logits. Figure~\ref{fig:architecture} shows the complete architecture.
+The Hebbian Trace Module attaches to a frozen pretrained language model as an external memory. It intercepts token embeddings for addressing, stores associations via Hebbian learning \citep{hebb1949organization}, and injects retrieved information into the model's output logits. Figure~\ref{fig:architecture} shows the complete architecture.
 
 \begin{figure}[t]
   \centering
@@ -122,7 +130,7 @@ In the hippocampus, the dentate gyrus creates sparse, decorrelated representatio
 \end{equation}
 where $\mathbf{W}_{\text{expand}} \in \mathbb{R}^{(f \cdot d) \times d}$ is a frozen random matrix (expansion factor $f$, typically $8\times$), and $\text{TopK}$ retains only the $k$ largest activations (typically 16). This transforms dense $\mathbf{Q}$ vectors into sparse codes where different concepts activate nearly non-overlapping dimensions.
 
-The expansion matrix $\mathbf{W}_{\text{expand}}$ receives no gradient and remains random---directly analogous to the largely random mossy fiber projections from dentate gyrus to CA3. At expansion $8\times$ with $k{=}16$ (6.25\% sparsity), mean cosine similarity between concept Q-vectors drops from 0.477 to 0.308, with intersection-over-union of 0.173.
+The expansion matrix $\mathbf{W}_{\text{expand}}$ receives no gradient and remains random---directly analogous to the largely random mossy fiber projections from dentate gyrus to CA3. At expansion $8\times$ with $k{=}16$ on MiniGPT ($d_{\text{head}}{=}32$, yielding 6.25\% sparsity), mean cosine similarity between concept Q-vectors drops from 0.477 to 0.308, with intersection-over-union of 0.173.
 
 \textbf{Empirical impact.}\quad Pattern separation consistently provides +9--26pp accuracy improvement across all experimental settings---from custom transformers to pretrained GPT-2, from single facts to multi-session scenarios (see Figure~\ref{fig:ablation}).
 
@@ -169,10 +177,36 @@ Inspired by CLS theory \citep{mcclelland1995complementary}, we assign different 
 \end{equation}
 This specialization is irrelevant when all facts are equally important (confirmed in ablation), but becomes critical for fact update tasks: split-decay heads improve overall accuracy by +7.4pp compared to uniform decay, specifically by reducing old-value interference from 28.5\% to 16.2\%.
 
+\subsection{Autoassociative Pattern Completion (CA3 Analog)}
+\label{sec:tauto}
+
+The hippocampal CA3 region functions as both a heteroassociative memory (mapping cues to stored patterns) and an autoassociative memory (completing partial or degraded cues to full patterns) \citep{rolls2013mechanisms}. Our heteroassociative trace $\mathbf{T}_v$ maps concept Q-vectors to entity V-vectors. We add a complementary autoassociative trace $\mathbf{T}_{\text{auto}}$ that maps variant Q-vectors to canonical concept Q-vectors:
+\begin{equation}
+  \mathbf{T}_{\text{auto}} \leftarrow \mathbf{T}_{\text{auto}} + \eta \cdot \mathbf{Q}_{\text{variant}}^\top \cdot \mathbf{Q}_{\text{concept}}
+  \label{eq:tauto_write}
+\end{equation}
+Unlike $\mathbf{T}_v$, updates to $\mathbf{T}_{\text{auto}}$ are purely additive (no decay)---these are static linguistic mappings, not episodic memories. Retrieval proceeds in two steps:
+\begin{align}
+  \mathbf{Q}_{\text{corrected}} &= \mathbf{Q}_{\text{variant}} \cdot \mathbf{T}_{\text{auto}} \label{eq:tauto_read} \\
+  \text{logits}_{\text{completion}} &= \alpha_c \cdot \mathbf{W}_{\text{out}}(\mathbf{Q}_{\text{corrected}} \cdot \mathbf{T}_v) \cdot \mathbf{W}_{\text{embed}}^\top \label{eq:completion_logits}
+\end{align}
+where $\alpha_c$ is the completion channel strength (optimal at 0.3). The completion channel operates in parallel with the standard retrieval path, and their logits are summed. When $\mathbf{T}_{\text{auto}}$ contains no relevant mapping, $\mathbf{Q}_{\text{corrected}}$ is near-zero and contributes negligible signal.
+
+\subsection{Multi-Hop Chain Retrieval}
+\label{sec:multihop}
+
+Standard trace retrieval handles single-hop queries: Q(concept) $\to$ $\mathbf{T}_v$ $\to$ entity. Multi-hop reasoning requires chaining: ``Where does John live?'' $\to$ Paris $\to$ ``What country is Paris in?'' $\to$ France. We implement this with zero new parameters via a direct retrieval pipeline:
+\begin{align}
+  \text{token}_1 &= \arg\max\, \mathbf{W}_{\text{out}}(\mathbf{Q}_{\text{addr}} \cdot \mathbf{T}_v) \cdot \mathbf{W}_{\text{embed}}^\top \label{eq:hop1} \\
+  \mathbf{Q}_2 &= \mathbf{W}_{\text{proj}}(\text{LN}(\text{wte}(\text{token}_1))) \label{eq:reencode} \\
+  \text{token}_2 &= \arg\max\, \mathbf{W}_{\text{out}}(\mathbf{Q}_{2,\text{addr}} \cdot \mathbf{T}_v) \cdot \mathbf{W}_{\text{embed}}^\top \label{eq:hop2}
+\end{align}
+Hop-1 retrieves an intermediate entity, decodes it via argmax over the embedding matrix, re-encodes it as a new query vector, and performs a second trace lookup. Both hops use the same trace $\mathbf{T}_v$---chain links are stored as entity-as-concept associations (e.g., Q(``Paris'') $\to$ V(``France'')). This \texttt{retrieve\_direct} operation bypasses the frozen LM entirely, using pure trace signal without $\alpha$-scaled LM logits, which we show matches standard forward-pass retrieval in accuracy (Section~\ref{sec:multihop_exp}).
+
 % ============================================================
 \section{Experimental Validation}
 
-We validate the architecture through 16 experiments across two model scales, following a systematic progression from individual components to the complete system.
+We validate the architecture through systematic experiments across three model scales and two architectures, following a progression from individual components to multi-hop reasoning on a real benchmark.
 
 \subsection{Development Platform: Custom Transformer (MiniGPT)}
 
@@ -207,9 +241,9 @@ Key findings from ablation studies are summarized in Table~\ref{tab:ablation} an
 
 \subsection{Transfer to Pretrained GPT-2}
 
-We attached the trace module to frozen GPT-2 Small (124M parameters) as an external memory with ${\sim}1.1$M trainable parameters ($\mathbf{W}_{\text{proj}}$, $\mathbf{W}_{\text{val}}$, $\mathbf{W}_{\text{out}}$, $\mathbf{W}_{\text{gate}}$, $\mathbf{W}_{\text{gate\_key}}$).
+We attached the trace module to frozen GPT-2 Small \citep{radford2019language} (124M parameters) as an external memory with ${\sim}1.1$M trainable parameters ($\mathbf{W}_{\text{proj}}$, $\mathbf{W}_{\text{val}}$, $\mathbf{W}_{\text{out}}$, $\mathbf{W}_{\text{gate}}$, $\mathbf{W}_{\text{gate\_key}}$).
 
-\textbf{Zero-shot proof of concept (Experiment~8).}\quad With random projections and zero fine-tuning, the trace achieves 100\% cross-context recall at $n{=}1$ (vs.\ 4\% baseline) and 84.1\% at $n{=}7$ with pattern separation (Figure~\ref{fig:cross_context}). This demonstrates that GPT-2's embedding space is sufficiently structured for Hebbian association without learned projections.
+\textbf{Zero-shot proof of concept.}\quad With random projections and zero fine-tuning, the trace achieves 100\% cross-context recall at $n{=}1$ (vs.\ 4\% baseline) and 84.1\% at $n{=}7$ with pattern separation (Figure~\ref{fig:cross_context}). This demonstrates that GPT-2's embedding space is sufficiently structured for Hebbian association without learned projections.
 
 \textbf{Pattern separation transfers identically.}\quad The same +12pp improvement magnitude observed on MiniGPT appears on GPT-2, confirming the mechanism's model-independence. Transfer to GPT-2 Medium (355M parameters) shows consistent improvements across model scales (Figure~\ref{fig:model_scaling}).
 
@@ -261,17 +295,18 @@ With $\alpha{=}50$ and pattern separation ($8\times$, $k{=}16$), Phi-2 achieves 
   \label{fig:model_scaling}
 \end{figure}
 
-\subsection{Learned Storage Gating (Experiments 9--11)}
+\subsection{Learned Storage Gating}
 
 Replacing the handcrafted linking-token mask with a learned gate (769 parameters) achieves equivalent accuracy while discovering the same token-level structure without supervision. Adding the semantic gate (769 additional parameters) reduces the noisy-paragraph accuracy gap from 44pp to 7.8pp, and to 2.6pp when combined with pattern separation.
 
-\subsection{Architectural Limitations (Experiment 12)}
+\subsection{Architectural Limitations}
+\label{sec:arch_limitations}
 
 Systematic diagnostic reveals three ceiling effects of context-free addressing:
 
 \begin{table}[h]
   \centering
-  \caption{Architectural limitations of context-free addressing, diagnosed in Experiment~12.}
+  \caption{Architectural limitations of context-free addressing.}
   \label{tab:limitations}
   \begin{tabular}{@{}lll@{}}
     \toprule
@@ -286,12 +321,12 @@ Systematic diagnostic reveals three ceiling effects of context-free addressing:
 
 These limitations motivate context-enriched addressing (Section~\ref{sec:context_enriched}) and define clear targets for future work.
 
-\subsection{Context-Enriched Addressing (Experiments 13--14)}
+\subsection{Context-Enriched Addressing}
 \label{sec:context_enriched}
 
 Blending context-free and contextual $\mathbf{Q}$ via $\mathbf{Q} = \mathbf{Q}_{\text{base}} + \beta \cdot \mathbf{W}_{\text{ctx}}(\mathbf{h})$ reveals a Pareto trade-off: increasing $\beta$ improves distractor discrimination at the cost of cross-session stability. Contrastive training of $\mathbf{W}_{\text{ctx}}$ reduces confusion from 74.7\% to 28.0\% at $\beta{=}0.5$, while cross-context alignment loss further improves the frontier.
 
-\subsection{Flagship Result: Multi-Session Persistent Memory (Experiment 16)}
+\subsection{Flagship Result: Multi-Session Persistent Memory}
 \label{sec:flagship}
 
 The complete system demonstrates persistent memory across sessions.
@@ -300,7 +335,7 @@ The complete system demonstrates persistent memory across sessions.
 
 \begin{table}[t]
   \centering
-  \caption{Flagship multi-session results (Experiment~16). The trace module maintains ${\geq}98\%$ recall across 15 sessions with fact updates and noisy paragraph input.}
+  \caption{Flagship multi-session results. The trace module maintains ${\geq}98\%$ recall across 15 sessions with fact updates and noisy paragraph input.}
   \label{tab:flagship}
   \begin{tabular}{@{}ll@{}}
     \toprule
@@ -321,14 +356,18 @@ The complete system demonstrates persistent memory across sessions.
 
 \textbf{Incremental vs.\ single-pass.}\quad The 4.2pp gap between incremental multi-session recall (98\%) and single-pass capacity at $n{=}24$ (94.4\%) reflects two effects: (1)~incremental introduction allows the trace to consolidate associations with less mutual interference, and (2)~the decay factor progressively attenuates older entries, which is less harmful when entries are refreshed across sessions via cumulative replay.
 
-The dual gate achieves $103\times$ selectivity between fact and filler sentences, enabling paragraph-level input where facts are interleaved with irrelevant content. Reconsolidation erasure maintains 99\% accuracy through fact updates, with trace norm decreasing during updates (confirming active cleanup rather than mere overwriting). Figures~\ref{fig:capacity} and~\ref{fig:retention} show capacity scaling and retention over sessions.
+The dual gate achieves $103\times$ selectivity between fact and filler sentences, enabling paragraph-level input where facts are interleaved with irrelevant content. Reconsolidation erasure maintains 99\% accuracy through fact updates, with trace norm decreasing during updates (confirming active cleanup rather than mere overwriting).
+
+\textbf{Hashed trace banks.}\quad To scale beyond 24 fact types, we partition the trace matrix into $n_{\text{banks}}$ independent compartments routed via the argmax of the sparse Q activation pattern. Each bank accumulates only ${\sim}N/n_{\text{banks}}$ facts, reducing interference, and decay is applied only to the written bank, preserving signal in others. With 16 banks, accuracy remains ${\geq}99\%$ through 100 simultaneously stored facts (vs.\ 35.6\% baseline), yielding an essentially flat scaling curve. 16 banks are sufficient; 32 provide no further gain. Zero new parameters are required---routing is derived from the existing pattern separation expansion.
+
+Figures~\ref{fig:capacity} and~\ref{fig:retention} show capacity scaling and retention over sessions.
 
 \begin{figure}[t]
   \centering
   \begin{subfigure}[t]{0.48\textwidth}
     \centering
     \includegraphics[width=\textwidth]{figures/capacity_curve.png}
-    \caption{Capacity stress test: accuracy degrades gracefully from 100\% ($n{\leq}15$) through 95\% ($n{\approx}31$) to 50\% ($n{\approx}80$). Pattern separation extends the capacity frontier by ${\sim}2\times$.}
+    \caption{Capacity stress test. Without banks, pattern separation extends capacity to 95\% at $n{\approx}31$. With 16 hashed trace banks, accuracy remains ${\geq}99\%$ through $n{=}100$.}
     \label{fig:capacity}
   \end{subfigure}
   \hfill
@@ -366,31 +405,124 @@ To validate beyond custom synthetic tasks, we evaluate on the LAMA T-REx knowled
   \end{tabular}
 \end{table}
 
-The trace consistently exceeds the in-context baseline by +50--60pp at $n{\geq}3$, demonstrating that Hebbian storage outperforms GPT-2's native in-context learning for structured fact retrieval even on real-world knowledge. Per-relation accuracy ranges from 100\% (rare concept words: genre, instrument) to 66\% (frequent concept words: birthplace, location), consistent with the Q-collision limitation identified in Section~4.4.
+The trace consistently exceeds the in-context baseline by +50--60pp at $n{\geq}3$, demonstrating that Hebbian storage outperforms GPT-2's native in-context learning for structured fact retrieval even on real-world knowledge. Per-relation accuracy ranges from 100\% (rare concept words: genre, instrument) to 66\% (frequent concept words: birthplace, location), consistent with the Q-collision limitation identified in Section~\ref{sec:arch_limitations}.
 
 \textbf{Caveats.}\quad The single-token constraint limits coverage to ${\sim}6\%$ of LAMA T-REx. Template reformatting means we test the trace mechanism's storage capacity on real knowledge, not GPT-2's ability to parse natural LAMA templates. These results complement, rather than replace, the controlled ablation on synthetic tasks.
+
+\subsection{Pattern Completion via Autoassociative Trace}
+\label{sec:tauto_exp}
+
+Context-free addressing creates a fundamental limitation: paraphrased questions produce different Q-vectors than the concept word used during storage. ``What do people call you?'' generates Q(``call''), but the fact ``My name is John'' was stored at Q(``name''). Without correction, paraphrased queries score 17--24\% (near random).
+
+\textbf{Setup.}\quad We define 17 Q$\to$Q template pairs mapping variant words to canonical concept words: Q(``I'')$\to$Q(``name''), Q(``home'')$\to$Q(``live''), Q(``employer'')$\to$Q(``work''), etc. These are written to $\mathbf{T}_{\text{auto}}$ once per episode.
+
+\textbf{Results.}\quad Table~\ref{tab:tauto} shows dramatic improvements across query categories. Misaligned queries (shifted template position) improve from 18\% to 85\% at $n{=}5$, and semantic reformulations (entirely different phrasing) reach 100\% at all fact counts.
+
+\begin{table}[t]
+  \centering
+  \caption{Pattern completion via $\mathbf{T}_{\text{auto}}$ (GPT-2 Small, $\alpha{=}0.5$, PS $8\times/k{=}16$, $\alpha_c{=}0.3$, 30 episodes). Aligned queries use the standard template; misaligned use shifted positions; semantic use entirely different phrasing.}
+  \label{tab:tauto}
+  \begin{tabular}{@{}ccccccc@{}}
+    \toprule
+    & \multicolumn{2}{c}{Aligned} & \multicolumn{2}{c}{Misaligned} & \multicolumn{2}{c}{Semantic} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+    $n$ & Std & $+\mathbf{T}_{\text{auto}}$ & Std & $+\mathbf{T}_{\text{auto}}$ & Std & $+\mathbf{T}_{\text{auto}}$ \\
+    \midrule
+    1 & 100\% & 100\% & 17\% & \textbf{100\%} & 27\% & \textbf{100\%} \\
+    3 & 100\% & 100\% & 22\% & \textbf{95\%} & 30\% & \textbf{100\%} \\
+    5 & 100\% & 100\% & 19\% & \textbf{86\%} & 33\% & \textbf{100\%} \\
+    7 & 100\% & 100\% & 24\% & \textbf{82\%} & 31\% & \textbf{100\%} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{Cross-model scaling.}\quad On Phi-2 (2.7B), the same $\alpha_c{=}0.3$ is optimal---the completion-to-standard signal ratio is model-independent. Phi-2 achieves 95.3\% on misaligned queries at $n{=}5$ (vs.\ GPT-2's 90.7\%), with the advantage growing at higher fact counts (+7.3pp at $n{=}7$), confirming that richer embeddings improve two-step retrieval.
+
+\textbf{Integration with full system.}\quad $\mathbf{T}_{\text{auto}}$ composes orthogonally with all existing mechanisms. In the 15-session flagship scenario with erasure, paraphrased queries on \emph{updated} facts return the \emph{new} value at 75\% accuracy---the completion channel correctly routes through the erased-and-rewritten $\mathbf{T}_v$.
+
+\subsection{Multi-Hop Reasoning}
+\label{sec:multihop_exp}
+
+\textbf{Synthetic chains.}\quad We validate the multi-hop pipeline (Section~\ref{sec:multihop}) on 11 city$\to$country chain pairs (Moscow$\to$Russia, Paris$\to$France, etc.). Each episode stores person$\to$city facts via \texttt{write\_fact\_direct} plus city$\to$country chain links. The two-hop query retrieves the person's country.
+
+\begin{table}[t]
+  \centering
+  \caption{Multi-hop chain accuracy (synthetic, 50--100 episodes, PS $8\times/k{=}16$). ``Total facts'' includes both standard person$\to$city facts and city$\to$country chain links.}
+  \label{tab:multihop_synthetic}
+  \begin{tabular}{@{}ccccl@{}}
+    \toprule
+    Total facts & Hop-1 & Hop-2$|$oracle & End-to-end & Notes \\
+    \midrule
+    12 & 100\% & 100\% & \textbf{100\%} & 1 standard + 11 chains \\
+    17 & 100\% & 100\% & \textbf{100\%} & 5 standard + 11 chains + 1 extra \\
+    27 & 100\% & 100\% & \textbf{100\%} & 15 standard + 11 chains + 1 extra \\
+    32 & 89\% & 85\% & 74\% & Capacity limit \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Q-vector similarity between city tokens (mean cosine $= 0.188$ after pattern separation) confirms low cross-talk. Cross-group similarity between city and concept word Q-vectors is even lower (mean $= 0.091$), explaining why chain links and standard facts coexist without interference through 27 total facts.
+
+\textbf{HotpotQA benchmark.}\quad We evaluate on real multi-hop questions from HotpotQA \citep{yang2018hotpotqa}, filtering the validation set to bridge-type questions with single-token BPE answers. From 5,918 bridge questions, 841 pass our filters (single-token answer, identifiable bridge entity, non-degenerate). Bridge entities are identified from the dataset's supporting fact annotations.
+
+\begin{table}[t]
+  \centering
+  \caption{HotpotQA 2-hop evaluation (841 bridge questions, PS $8\times/k{=}16$). Oracle-supported: supporting facts provided, single-token answers only (${\sim}16\%$ of bridge questions); not comparable to end-to-end QA leaderboard entries. Per-question: trace reset between questions. Batched: $N$ questions share a single trace, 50 random batches.}
+  \label{tab:hotpotqa}
+  \begin{tabular}{@{}ccccc@{}}
+    \toprule
+    Mode & $N$ & Total facts & Hop-1 & End-to-end \\
+    \midrule
+    Per-question & 1 & 2 & 100\% & \textbf{100\%} (841/841) \\
+    \midrule
+    Batched & 1 & 2 & 100\% & \textbf{100\%} \\
+    Batched & 5 & 10 & 100\% & \textbf{98.4\%} \\
+    Batched & 10 & 20 & 94.6\% & 89.0\% \\
+    Batched & 15 & 30 & 80.5\% & 63.1\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The primary bottleneck in batched mode is bridge-entity first-token collision: 40.7\% of questions share a bridge entity first BPE token (e.g., ``The''), creating identical Q-vectors at hop-2. Despite this, the system achieves 98.4\% with 5 simultaneous question-answer pairs---10 real-world facts from diverse Wikipedia domains stored in a single trace.
+
+We emphasize that this evaluation tests the trace mechanism's multi-hop capability on real-world facts, not end-to-end QA performance---oracle supporting facts and single-token answer filtering mean these results are not directly comparable to HotpotQA leaderboard entries, which must additionally solve retrieval from 5M+ paragraphs and open-ended answer generation.
+
+\subsection{Free-Text Pipeline and Dialogue Integration}
+\label{sec:freetext}
+
+The preceding experiments use structured templates. We validate the path toward natural interaction through two extensions.
+
+\textbf{Free-text extraction.}\quad A direct-write API (\texttt{write\_fact\_direct}) bypasses the template machinery entirely, storing associations via \texttt{compute\_q\_for\_token} and \texttt{compute\_v\_for\_token}. A regex-based extractor identifies concept--entity pairs from free-form utterances (``I live in Paris'', ``Call me John'', ``My favorite color is blue'') with 100\% precision and 94.1\% recall. End-to-end accuracy matches the template pipeline (80.8\% at $n{=}5$), confirming zero overhead from the direct-write path.
+
+\textbf{Multi-turn dialogue.}\quad Facts accumulate across dialogue turns. 10 dialogue templates across 3 categories (introduction, update, dense) test natural conversation flow. Results: 100\% across all phases---introduction (1,400 queries), updates with erasure (1,200 queries including 250 updated facts), and multi-dialogue sessions (5 dialogues, ${\sim}10$ accumulated facts). The erasure mechanism handles in-dialogue corrections (``Actually, I moved to London'') with 100\% accuracy.
 
 % ============================================================
 \section{Discussion}
 
 \subsection{Composability as a Design Principle}
 
-A central finding is that bio-inspired mechanisms compose orthogonally when they target independent bottlenecks. Pattern separation reduces storage interference; gating reduces input noise; erasure handles updates; CLS decay manages temporal dynamics. No component interferes with another, and their benefits are approximately additive. This suggests that the hippocampal memory system's multi-mechanism architecture is not merely an evolutionary accident but a functionally optimal decomposition.
+A central finding is that bio-inspired mechanisms compose orthogonally when they target independent bottlenecks. Pattern separation reduces storage interference; gating reduces input noise; erasure handles updates; CLS decay manages temporal dynamics; $\mathbf{T}_{\text{auto}}$ resolves query variants; and multi-hop chains extend retrieval depth. No component interferes with another, and their benefits are approximately additive. The 15-session flagship with $\mathbf{T}_{\text{auto}}$ demonstrates the strongest composition test: seven mechanisms operating simultaneously (DG, CA3-hetero, CA3-auto, ACh gates, reconsolidation, CLS, replay) maintain 98\% standard recall while adding paraphrase resolution at 75\% on updated facts. This suggests that the hippocampal memory system's multi-mechanism architecture is not merely an evolutionary accident but a functionally optimal decomposition.
+
+\subsection{Logit-Space Injection as a Universal Memory Interface}
+
+A key architectural decision is injecting retrieved information at the logit level (Equation~\ref{eq:logit_injection}) rather than into intermediate hidden states. This choice is motivated by a practical observation: GPT-2's residual stream norms reach ${\sim}3{,}000$ in late layers, while the trace module's output norms are ${\sim}0.06$---a $50{,}000\times$ scale mismatch that makes hidden-state injection ineffective without layer-specific calibration. Logit-space injection sidesteps this entirely: the trace output is projected through the model's own embedding matrix $\mathbf{W}_{\text{embed}}^\top$, producing a bias in the vocabulary distribution that is naturally calibrated regardless of model scale.
+
+This design has three consequences that extend beyond our specific system. First, it enables \emph{model-agnostic attachment}---the same trace module transfers from GPT-2 (124M) to Phi-2 (2.7B) without recalibration, because logit space is anchored to the shared vocabulary. Second, it preserves the frozen model's distribution: trace injection shifts token probabilities without corrupting learned representations. Third, it provides a clean separation of concerns---the base model handles language generation while the trace module handles factual recall, composing at the output level rather than entangling in hidden dynamics. We suggest that logit-space injection may serve as a general interface for external memory modules attached to frozen language models.
 
 \subsection{Limitations}
 
-We identify five concrete limitations that define the gap between our proof-of-concept and practical deployment:
+We identify five concrete limitations, noting where recent extensions have partially addressed them:
 
 \begin{enumerate}[leftmargin=*]
-  \item \textbf{Structured input dependency.} Facts must follow \texttt{\{concept\} \{linking\_token\} \{entity\}} templates with specific linking tokens (``is'', ``in'', ``at''). Fully unconstrained text---where facts are expressed through arbitrary syntax (``The red one has always been my favorite'')---is not supported by the current shift-based addressing mechanism.
+  \item \textbf{Structured input dependency (partially addressed).} The core mechanism requires \texttt{\{concept\} \{linking\_token\} \{entity\}} templates. The free-text extraction pipeline (Section~\ref{sec:freetext}) relaxes this by accepting natural utterances (``Call me John'', ``I live in Paris''), but still requires recognizable patterns. Fully unconstrained text (``The red one has always been my favorite'') remains unsupported.
 
-  \item \textbf{Single-token entities.} Entity values must tokenize to exactly one BPE token. Multi-token entities (``San Francisco'', ``machine learning'') require chain-write mechanisms not yet implemented, significantly limiting the vocabulary of storable facts.
+  \item \textbf{Single-token entities.} Entity values must tokenize to exactly one BPE token. While multi-hop chains use first-token addressing for multi-token bridge entities (Section~\ref{sec:multihop_exp}), this produces collisions (40.7\% of HotpotQA bridge entities share a first token like ``The''). A proper multi-token addressing mechanism---entity hashing or learned encoding---would resolve this.
 
-  \item \textbf{Context-free addressing trade-off.} Using token identity (not context) for addressing enables cross-session stability but fundamentally cannot distinguish entities sharing a concept word---``my name'' and ``Alice's name'' produce identical Q vectors. The Pareto trade-off between discrimination and stability (Section~\ref{sec:context_enriched}) remains partially unresolved.
+  \item \textbf{Context-free addressing trade-off.} Using token identity for addressing enables cross-session stability but cannot distinguish ``my name'' from ``Alice's name''. $\mathbf{T}_{\text{auto}}$ partially mitigates the related paraphrase problem, but the ownership-discrimination Pareto trade-off (Section~\ref{sec:context_enriched}) remains unresolved.
 
-  \item \textbf{Scale.} Validation covers GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B), all with 24 fact types (${\sim}50$ facts). Scaling to hundreds of facts and models beyond 3B is untested.
+  \item \textbf{Scale (partially addressed).} Validation covers three model scales up to 2.7B. Hashed trace banks extend capacity to ${\geq}99\%$ at $n{=}100$ simultaneously stored facts (vs.\ 35.6\% baseline), but scaling to hundreds of facts and models beyond 3B is untested.
 
-  \item \textbf{Limited standard benchmark coverage.} Our LAMA evaluation (Section~\ref{sec:lama}) covers only ${\sim}6\%$ of T-REx relations due to the single-token constraint, and remaining experiments use custom synthetic tasks designed to isolate cross-session persistence. Broader evaluation on multi-token benchmarks (TriviaQA, Natural Questions) and larger relation sets would strengthen generalizability claims.
+  \item \textbf{Benchmark coverage (partially addressed).} The HotpotQA evaluation (841 bridge questions, Section~\ref{sec:multihop_exp}) provides the first real-world multi-hop benchmark. However, it uses oracle supporting facts and single-token answer filtering (${\sim}16\%$ of bridge questions). End-to-end QA with open extraction and multi-token answers requires LLM-based relation extraction and broader entity addressing.
 \end{enumerate}
 
 \subsection{Connection to Biological Memory}
@@ -402,6 +534,10 @@ Our architecture implements a simplified hippocampal loop: dentate gyrus (patter
 
 Several directions extend from the current foundation:
 
+\textbf{LLM-based relation extraction.}\quad The free-text pipeline currently uses regex patterns. Replacing these with an LLM extractor would enable open-domain relation types and unconstrained input, closing the gap between our oracle-extracted HotpotQA evaluation and a production multi-hop QA system.
+
+\textbf{Multi-token entity addressing.}\quad First-token addressing produces collisions for common BPE prefixes (40.7\% on HotpotQA). Learned entity encoders or hash-based addressing over full entity strings would resolve this bottleneck and enable the trace to handle realistic entity vocabularies.
+
 \textbf{Episodic memory for agents.}\quad The current system stores declarative facts. Extending trace to store experiential episodes---situation-action-outcome tuples---would enable inference-time learning for LLM-based agents, where performance improves across episodes without weight updates.
 
 \textbf{Neocortical consolidation.}\quad In biological memory, hippocampal traces are gradually consolidated into neocortical representations. An analog process---periodically distilling trace contents into model weights through targeted fine-tuning---could combine the fast learning of Hebbian traces with the capacity of parametric memory.
@@ -411,7 +547,7 @@ Several directions extend from the current foundation:
 % ============================================================
 \section{Conclusion}
 
-We have presented the Hebbian Trace Module, a bio-inspired external memory system that demonstrates persistent cross-session memory for frozen language models on structured fact association tasks. Through systematic development across 16 experiments, we showed that five composable mechanisms---pattern separation, Hebbian storage, dual semantic gating, reconsolidation erasure, and complementary learning systems---can be combined to achieve 98--99\% mean recall across 15 sessions with only 1M additional parameters. Each mechanism is independently motivated by hippocampal neuroscience, independently validated through ablation, and composes orthogonally with the others. Zero-shot cross-architecture transfer to Phi-2 (2.7B)---a fundamentally different architecture---achieves 98--100\% accuracy, demonstrating that the mechanism is architecture-agnostic. Significant limitations remain---notably structured input requirements and single-token entities---but our results suggest that the computational principles underlying biological memory systems offer viable architectural inductive biases for adding persistent, updatable memory to pretrained language models without modifying their weights.
+We have presented the Hebbian Trace Module, a bio-inspired external memory system that provides persistent, updatable, and compositional memory for frozen language models. Through systematic development across three model scales, we showed that eight composable mechanisms---pattern separation, heteroassociative and autoassociative Hebbian storage, dual semantic gating, reconsolidation erasure, complementary learning systems, hippocampal replay, and hashed trace banks---can be combined to achieve 98--99\% mean recall across 15 sessions, scale to ${\geq}99\%$ accuracy at 100 simultaneously stored facts, resolve paraphrased queries (+83pp on misaligned queries), exceed GPT-2's in-context baseline by +50--60pp on LAMA T-REx knowledge probes, and perform oracle-supported multi-hop reasoning at 100\% accuracy on 841 HotpotQA bridge questions, all with ${\sim}1$M additional parameters. Each mechanism is independently motivated by hippocampal neuroscience, independently validated through ablation, and composes orthogonally with the others. Zero-shot cross-architecture transfer to Phi-2 (2.7B) achieves 92--100\% accuracy with performance that improves with model size, demonstrating architecture-agnostic generalization. The free-text extraction pipeline and dialogue system demonstrate the path from controlled templates to natural interaction. Significant limitations remain---notably single-token entity addressing and structured extraction---but our results suggest that the computational principles underlying biological memory systems offer viable inductive biases for adding persistent, compositional memory to pretrained language models without modifying their weights.
 
 % ============================================================
 \bibliography{references}

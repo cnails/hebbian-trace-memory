@@ -244,6 +244,7 @@ def run_capacity_test(
     n_eval: int = 20,
     weights_path: str = "weights/trace_module.pt",
     test_no_ps: bool = False,
+    n_banks: int = 1,
     seed: int = 42,
 ):
     # Device
@@ -296,6 +297,10 @@ def run_capacity_test(
         print(f"  Loaded weights from {weights_path}")
     except FileNotFoundError:
         print(f"  Warning: {weights_path} not found, using random projections")
+
+    if n_banks > 1:
+        model.set_bank_mode(n_banks)
+        print(f"  Hashed trace banks: {n_banks}")
 
     print()
     results_ps: dict[int, dict] = {}
@@ -473,6 +478,8 @@ def main():
                         default="weights/trace_module.pt")
     parser.add_argument("--no-ps", action="store_true",
                         help="Also test without pattern separation")
+    parser.add_argument("--banks", type=int, default=1,
+                        help="Number of hashed trace banks (default: 1 = disabled)")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -480,6 +487,7 @@ def main():
         n_eval=args.n_eval,
         weights_path=args.weights,
         test_no_ps=args.no_ps,
+        n_banks=args.banks,
         seed=args.seed,
     )
 

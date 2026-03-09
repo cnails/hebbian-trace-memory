@@ -143,9 +143,7 @@ Q_store *= combined
 
 **Selectivity**: 103x ratio between fact and filler gate activations. Trained via cross-context retrieval loss — no manual token labels.
 
-**Training**: Each gate is a single linear layer (769 parameters). Trained sequentially:
-1. `W_gate` (5 stages): learns to detect linking tokens from retrieval loss alone
-2. `W_gate_key` (4 stages): learns concept relevance on paragraph inputs with interleaved filler
+**Training**: Each gate is a single linear layer (769 parameters), trained via cross-context retrieval loss with curriculum learning (increasing fact count and sparsity pressure).
 
 ---
 
