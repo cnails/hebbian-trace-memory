@@ -160,21 +160,33 @@ def generate_cross_context_table():
     n_facts = [1, 3, 5, 7]
     # 100-episode evaluation, seed=42
     cross_ctx = [1.00, 0.897, 0.854, 0.820]
-    baseline = [0.060, 0.043, 0.032, 0.043]
+    knn_lm = [1.00, 0.370, 0.224, 0.149]
     in_context = [0.990, 0.730, 0.628, 0.616]
+    baseline = [0.060, 0.043, 0.032, 0.043]
 
     ax.plot(n_facts, cross_ctx, 'o-', color='#2563eb', linewidth=2.5,
-            markersize=9, label='Cross-context (trace)', zorder=3)
+            markersize=9, label='Hebbian trace', zorder=4)
     ax.plot(n_facts, in_context, 's-', color='#f59e0b', linewidth=2,
-            markersize=7, label='In-context (GPT-2 native)', zorder=2)
+            markersize=7, label='In-context (GPT-2)', zorder=2)
+    ax.plot(n_facts, knn_lm, 'D-', color='#dc2626', linewidth=2,
+            markersize=7, label='kNN-LM (k=32)', zorder=3)
     ax.plot(n_facts, baseline, '^--', color='#9ca3af', linewidth=1.5,
             markersize=6, label='No trace (random)', zorder=1)
 
-    ax.fill_between(n_facts, baseline, cross_ctx, alpha=0.08, color='#2563eb')
+    ax.fill_between(n_facts, knn_lm, cross_ctx, alpha=0.08, color='#2563eb')
+
+    # Gap annotation at n=5
+    ax.annotate('+63pp',
+                xy=(5, 0.54), fontsize=11,
+                color='#2563eb', fontweight='bold',
+                ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.3',
+                          facecolor='#eff6ff', edgecolor='#2563eb',
+                          alpha=0.9))
 
     ax.set_xlabel('Number of Facts', fontsize=13)
     ax.set_ylabel('Accuracy', fontsize=13)
-    ax.set_title('Cross-Context Retrieval: Trace Exceeds In-Context at All Fact Counts',
+    ax.set_title('Cross-Context Retrieval: Trace vs kNN-LM vs In-Context',
                  fontsize=13, fontweight='bold')
     ax.set_xticks(n_facts)
     ax.set_ylim(-0.02, 1.12)
