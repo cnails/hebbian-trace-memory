@@ -354,7 +354,7 @@ def generate_rag_comparison():
     ax1.plot(n_facts_7, trace_7, 'o-', color='#2563eb', linewidth=2.5,
              markersize=9, label='Hebbian Trace', zorder=3)
     ax1.plot(n_facts_7, rag_7, 's-', color='#7c3aed', linewidth=2,
-             markersize=7, label='RAG (k=1)', zorder=2)
+             markersize=7, label='RAG-Oracle (perfect retrieval)', zorder=2)
     ax1.plot(n_facts_7, in_ctx_7, '^-', color='#f59e0b', linewidth=2,
              markersize=7, label='In-context (all facts)', zorder=2)
     ax1.plot(n_facts_7, no_mem_7, 'x--', color='#9ca3af', linewidth=1.5,
@@ -381,7 +381,7 @@ def generate_rag_comparison():
     ax2.plot(n_facts_24, trace_24, 'o-', color='#2563eb', linewidth=2.5,
              markersize=9, label='Hebbian Trace', zorder=3)
     ax2.plot(n_facts_24, rag_24, 's-', color='#7c3aed', linewidth=2,
-             markersize=7, label='RAG (k=1)', zorder=2)
+             markersize=7, label='RAG-Oracle (perfect retrieval)', zorder=2)
     ax2.plot(n_facts_24, in_ctx_24, '^-', color='#f59e0b', linewidth=2,
              markersize=7, label='In-context (all facts)', zorder=2)
     ax2.plot(n_facts_24, no_mem_24, 'x--', color='#9ca3af', linewidth=1.5,

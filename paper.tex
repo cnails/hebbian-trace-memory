@@ -281,7 +281,7 @@ With $\alpha{=}50$ and pattern separation ($8\times$, $k{=}16$), Phi-2 achieves 
   \begin{subfigure}[t]{0.48\textwidth}
     \centering
     \includegraphics[width=\textwidth]{figures/rag_comparison.png}
-    \caption{Comparison with RAG baseline (k=1 retrieval). In the realistic 24-type regime (229 entity candidates), the trace outperforms RAG by up to +42pp.}
+    \caption{Comparison with RAG-Oracle (perfect retrieval upper bound). In the easy 7-type regime, Oracle RAG exceeds the trace; in the realistic 24-type regime (229 entity candidates), the trace outperforms Oracle RAG by up to +42pp, as concept-addressed retrieval is phrasing-invariant while RAG degrades with vocabulary size.}
     \label{fig:rag}
   \end{subfigure}
   \caption{Cross-context retrieval performance on GPT-2 Small.}
