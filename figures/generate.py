@@ -620,14 +620,14 @@ def generate_multihop_capacity():
     ax.set_title('Multi-Hop Chain Capacity: Two-Hop Reasoning via Trace',
                  fontsize=14, fontweight='bold')
     ax.set_xticks(n_chains)
-    ax.set_ylim(85, 102)
+    ax.set_ylim(85, 103)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
     ax.legend(loc='lower left', fontsize=10)
     ax.grid(True, alpha=0.3)
 
     # Annotation
     ax.annotate('100% end-to-end\nat N=5 chains',
-                xy=(5, 100), xytext=(7, 102),
+                xy=(5, 100), xytext=(2.2, 93),
                 fontsize=10, fontweight='bold', color='#7c3aed',
                 arrowprops=dict(arrowstyle='->', color='#7c3aed', lw=1.5),
                 va='center')

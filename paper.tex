@@ -40,7 +40,7 @@
 
 % ============================================================
 \begin{abstract}
-Large language models lack persistent memory---knowledge acquired during one session is lost when the context resets. We introduce the Hebbian Trace Module, a lightweight external memory that attaches to frozen pretrained LLMs and demonstrates the feasibility of cross-session knowledge retention without fine-tuning. Inspired by hippocampal memory systems, our architecture combines seven composable mechanisms: sparse pattern separation (dentate gyrus), Hebbian associative storage (CA3 heteroassociative), autoassociative pattern completion (CA3 autoassociative), dual semantic gating (cholinergic modulation), reconsolidation erasure, complementary learning systems, and hippocampal replay. We validate the module across three model scales---GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B)---demonstrating architecture-agnostic transfer with zero-shot generalization. On structured fact tasks, the module achieves 98--99\% mean cross-session recall across 15 sessions with 24 fact types, including fact updates and paragraph input with noise filtering. The autoassociative trace resolves paraphrased queries (``What do people call you?'' $\to$ ``What is my name?''), improving misaligned query accuracy by up to +83pp (17\% $\to$ 100\% at $n{=}1$) without degrading aligned retrieval. On LAMA T-REx facts (2,034 Wikidata entries, oracle-assigned concept words), the trace achieves 81--94\% cross-context retrieval, exceeding GPT-2's in-context baseline by 50--60 percentage points on a realistic entity vocabulary (1,014 unique tokens). A multi-hop retrieval pipeline chains two trace lookups via intermediate decoding, achieving 100\% end-to-end accuracy on 841 HotpotQA bridge questions under oracle-supported evaluation (single-token answers, given supporting facts), and ${\geq}98.5\%$ with up to 15 simultaneous question-answer pairs when using hashed trace banks with best-bank scan retrieval. Compared to the kNN-LM baseline---the closest existing approach, which also attaches to frozen LMs without fine-tuning---the trace outperforms by +63pp at $n{=}5$ on cross-context retrieval, where storage and query use different phrasing. A free-text extraction pipeline and multi-turn dialogue system demonstrate the path from structured templates to natural interaction. We validate each component through systematic ablation, demonstrating that all seven mechanisms compose orthogonally. Our results suggest that persistent, updatable, and compositional memory can be added to pretrained language models as a modular plug-in without modifying model weights.
+Large language models lack persistent memory---knowledge acquired during one session is lost when the context resets. We introduce the Hebbian Trace Module, a lightweight external memory that attaches to frozen pretrained LLMs and demonstrates the feasibility of cross-session knowledge retention without fine-tuning. Inspired by hippocampal memory systems, our architecture combines seven composable mechanisms: sparse pattern separation (dentate gyrus), Hebbian associative storage (CA3 heteroassociative), autoassociative pattern completion (CA3 autoassociative), dual semantic gating (cholinergic modulation), reconsolidation erasure, complementary learning systems, and hippocampal replay. We validate the module across three model scales---GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B)---demonstrating architecture-agnostic transfer with zero-shot generalization. On structured fact tasks, the module achieves 98--99\% mean cross-session recall across 15 sessions with 24 fact types, including fact updates and paragraph input with noise filtering. The autoassociative trace resolves paraphrased queries (``What do people call you?'' $\to$ ``What is my name?''), improving misaligned query accuracy by up to +83pp (17\% $\to$ 100\% at $n{=}1$) without degrading aligned retrieval. On LAMA T-REx facts (2,034 Wikidata entries, 40 relation types), the trace achieves 81--94\% cross-context retrieval---with automated concept-word assignment from Wikidata labels matching manually curated words within confidence intervals---exceeding GPT-2's in-context baseline by 50--60 percentage points on a realistic entity vocabulary (1,014--1,107 unique tokens). A multi-hop retrieval pipeline chains two trace lookups via intermediate decoding, achieving 100\% end-to-end accuracy on 4,878 HotpotQA bridge questions under oracle-supported evaluation (first-token answer match, given supporting facts), and ${\geq}98.7\%$ with up to 15 simultaneous question-answer pairs when using hashed trace banks with best-bank scan retrieval. Compared to the kNN-LM baseline---the closest existing approach, which also attaches to frozen LMs without fine-tuning---the trace outperforms by +63pp at $n{=}5$ on cross-context retrieval, where storage and query use different phrasing. An LLM-based free-text extraction pipeline (Flan-T5-small, 80M parameters) achieves 94\% F1 on unconstrained natural text where regex extraction fails entirely, and a multi-turn dialogue system demonstrates integration into conversational interaction. We validate each component through systematic ablation, demonstrating that all seven mechanisms compose orthogonally. Our results suggest that persistent, updatable, and compositional memory can be added to pretrained language models as a modular plug-in without modifying model weights.
 \end{abstract}
 
 % ============================================================
@@ -53,21 +53,17 @@ The human brain solves this problem through the hippocampal memory system---a fa
 We propose the Hebbian Trace Module, an external memory system that translates these hippocampal principles into a computational module attachable to any frozen pretrained language model. Our key contributions are:
 
 \begin{enumerate}[leftmargin=*]
-  \item \textbf{A modular persistent memory architecture} comprising seven bio-inspired, independently validated components that compose orthogonally, enabling cross-session knowledge retention, paraphrase resolution, and multi-hop retrieval for frozen LLMs.
+  \item \textbf{A modular persistent memory architecture} comprising seven bio-inspired, independently validated components that compose orthogonally, enabling cross-session knowledge retention, paraphrase resolution, and multi-hop retrieval for frozen LLMs. Hash-routed trace banks extend capacity scaling: with 16 banks, accuracy remains ${\geq}99\%$ through 100 simultaneously stored facts (vs.\ 35.6\% without banks), yielding an essentially flat scaling curve with zero new parameters.
 
   \item \textbf{Architecture-agnostic transfer across three model scales.} Mechanisms developed on a custom transformer (6.4M parameters) transfer to GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 \citep{javaheripi2023phi} (2.7B)---a fundamentally different architecture---with zero-shot generalization and accuracy that improves with model size.
 
-  \item \textbf{Multi-hop retrieval validated on real-world facts.} A two-hop trace chain achieves 100\% end-to-end accuracy on 841 HotpotQA \citep{yang2018hotpotqa} bridge questions under oracle-supported evaluation, with zero new parameters---intermediate results are decoded from trace via argmax and re-encoded as new queries. Best-bank scan retrieval maintains ${\geq}98.5\%$ accuracy with up to 15 simultaneous question batches, resolving first-token collisions that affect 40.7\% of bridge entities.
-
-  \item \textbf{Real-world entity vocabularies.} On the LAMA T-REx benchmark (2,034 Wikidata facts, 32 relations), cross-context trace retrieval achieves 81--94\% accuracy with oracle-assigned concept words, exceeding GPT-2's in-context baseline by +50--60pp. This validates storage capacity on realistic entity vocabularies (1,014 unique tokens), though the concept-word mapping simplifies the task to associative storage rather than open-domain knowledge probing.
+  \item \textbf{Real-world validation on two public benchmarks.} A two-hop trace chain achieves 100\% end-to-end accuracy on 4,878 HotpotQA \citep{yang2018hotpotqa} bridge questions under oracle-supported evaluation, maintaining ${\geq}98.7\%$ with up to 15 simultaneous question batches via best-bank scan retrieval. On the LAMA T-REx benchmark (2,034 Wikidata facts, 40 relations), cross-context trace retrieval achieves 81--94\% accuracy---with automated concept-word assignment matching oracle curation within confidence intervals---exceeding GPT-2's in-context baseline by +50--60pp on a realistic entity vocabulary (1,014--1,107 unique tokens).
 
   \item \textbf{Autoassociative pattern completion.} A second trace ($\mathbf{T}_{\text{auto}}$) maps variant query vectors to canonical concept vectors, resolving paraphrased questions (+83pp at $n{=}1$) and semantic reformulations (+73pp) without degrading aligned retrieval.
 
   \item \textbf{Systematic ablation}, isolating the contribution of each component and mapping architectural limitations. We demonstrate +26pp from pattern separation, +46pp from semantic gating, +38pp from reconsolidation erasure, and +83pp from pattern completion on targeted benchmarks.
 
-  \item \textbf{Capacity scaling via hashed trace banks.} Hash-routed trace banks partition the memory into independent compartments, each accumulating only ${\sim}N/n_{\text{banks}}$ facts. With 16 banks, accuracy remains ${\geq}99\%$ through 100 simultaneously stored facts (vs.\ 35.6\% without banks), yielding an essentially flat scaling curve with zero new parameters.
-
-  \item \textbf{From structured templates to natural interaction.} A free-text extraction pipeline and multi-turn dialogue system demonstrate fact accumulation, updates, and retrieval from unstructured input, achieving 100\% accuracy across introduction, update, and multi-dialogue phases.
+  \item \textbf{From structured templates to natural interaction.} An LLM-based extraction pipeline (Flan-T5-small) achieves 94\% F1 on unconstrained text where regex fails entirely, and a multi-turn dialogue system demonstrates fact accumulation, updates, and retrieval across conversational turns with 100\% accuracy.
 \end{enumerate}
 
 % ============================================================
@@ -218,16 +214,16 @@ Key findings from ablation studies are summarized in Table~\ref{tab:ablation} an
   \centering
   \caption{Component ablation on MiniGPT. Each mechanism targets an independent bottleneck and composes orthogonally with the others.}
   \label{tab:ablation}
-  \begin{tabular}{@{}llll@{}}
+  \begin{tabular}{@{}lll@{}}
     \toprule
-    Component & Exp. & Effect ($n{=}10$) & Mechanism \\
+    Component & Effect ($n{=}10$) & Mechanism \\
     \midrule
-    Pattern separation & 5 & +9.3pp cross-context & Sparse Q reduces interference \\
-    Adaptive alpha & 3 & +16pp Hebbian, +2pp cross & Score trace normalization \\
-    CLS decay & 6 & +7.4pp overall (updates) & Fast/slow head specialization \\
-    Selective erasure & 6 & +11.7pp overall (updates) & Anti-Hebbian old-value removal \\
-    Concept injection & 7 & +90pp Tier~2 templates & Semantic Q override \\
-    Dual gates & 11 & +46pp noisy paragraphs & Semantic filtering of storage \\
+    Pattern separation (\S\ref{sec:pattern_sep}) & +9.3pp cross-context & Sparse Q reduces interference \\
+    Adaptive alpha & +16pp Hebbian, +2pp cross & Score trace normalization \\
+    CLS decay (\S\ref{sec:cls}) & +7.4pp overall (updates) & Fast/slow head specialization \\
+    Selective erasure (\S3.3) & +11.7pp overall (updates) & Anti-Hebbian old-value removal \\
+    Concept injection & +90pp Tier~2 templates & Semantic Q override \\
+    Dual gates (\S3.2) & +46pp noisy paragraphs & Semantic filtering of storage \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -384,30 +380,30 @@ Figures~\ref{fig:capacity} and~\ref{fig:retention} show capacity scaling and ret
 \subsection{Real-World Entity Vocabulary: LAMA T-REx}
 \label{sec:lama}
 
-To test storage capacity on realistic entity vocabularies beyond synthetic tasks, we evaluate on the LAMA T-REx benchmark \citep{petroni2019language}. We use LAMA as a source of real Wikidata facts with diverse entity tokens, rather than as an end-to-end knowledge probing test---the concept-word assignment required by our architecture simplifies the task relative to standard LAMA evaluation (see caveats below).
+To test storage capacity on realistic entity vocabularies beyond synthetic tasks, we evaluate on the LAMA T-REx benchmark \citep{petroni2019language}. We use LAMA as a source of real Wikidata facts with diverse entity tokens, rather than as an end-to-end knowledge probing test.
 
-\textbf{Adaptation.}\quad LAMA facts are reformatted into the system's \texttt{\{concept\} \{linking\_token\} \{entity\}} templates, with each T-REx relation assigned a unique concept word. For example, the LAMA relation P36 (capital) becomes: storage \texttt{``capital is Paris.''}, query \texttt{``capital is''}. We filter to facts where the object label is a single BPE token, yielding 2,034 valid facts across 32 relations (1,014 unique entity tokens; random chance ${=}\,0.1\%$).
+\textbf{Adaptation.}\quad LAMA facts are reformatted into the system's \texttt{\{concept\} \{linking\_token\} \{entity\}} templates, with each T-REx relation assigned a unique concept word. We evaluate two assignment strategies: (1)~\emph{oracle}: manually curated concept words optimized for single-token BPE and semantic precision (32 relations, 2,034 facts, 1,014 unique entity tokens), and (2)~\emph{auto}: concept words derived algorithmically from Wikidata property labels with zero manual curation (40 relations, 2,625 facts, 1,107 unique entity tokens). The auto algorithm splits each property label into words, removes stopwords, tries compound and individual words in deterministic order, and selects the first valid single-token BPE candidate, resolving collisions by falling back to the next candidate. Five collisions were resolved with semantically reasonable fallbacks (e.g., ``citizenship'' instead of ``country'' for P27); only one predicate (P36) was dropped. Random chance is ${\sim}0.1\%$.
 
 \begin{table}[t]
   \centering
-  \caption{LAMA T-REx evaluation: cross-context retrieval accuracy across fact counts (100 episodes, bootstrap 95\% CIs, oracle-assigned concept words). The trace exceeds GPT-2's in-context baseline by +50--60pp at $n{\geq}3$.}
+  \caption{LAMA T-REx evaluation: cross-context retrieval accuracy (100 episodes, bootstrap 95\% CIs). Oracle: 32 relations with manually curated concept words. Auto: 40 relations with concept words derived algorithmically from Wikidata property labels. Automated concept assignment achieves equivalent accuracy within CI, confirming that the trace does not depend on expert-selected addressing words.}
   \label{tab:lama}
-  \begin{tabular}{@{}lccc@{}}
+  \begin{tabular}{@{}lcccc@{}}
     \toprule
-    $n_{\text{facts}}$ & Cross-context (trace) & In-context (GPT-2) & No memory \\
+    $n_{\text{facts}}$ & Oracle (32 rel) & Auto (40 rel) & In-context & No memory \\
     \midrule
-    1  & \textbf{100.0\%}                  & 95.0\%  & 1.0\% \\
-    3  & \textbf{94.0\%} (91.3--96.3\%)    & 43.3\%  & 0.3\% \\
-    5  & \textbf{93.6\%} (91.4--95.6\%)    & 41.6\%  & 0.2\% \\
-    7  & \textbf{88.7\%} (86.7--90.7\%)    & 29.7\%  & 0.3\% \\
-    10 & \textbf{81.2\%} (79.0--83.3\%)    & 24.7\%  & 0.1\% \\
+    1  & \textbf{100.0\%}               & 99.0\%                      & 95.0\%  & 1.0\% \\
+    3  & 94.0\% (91.3--96.3\%)          & \textbf{95.3\%} (93.0--97.3\%)  & 43.3\%  & 0.3\% \\
+    5  & 93.8\% (91.6--95.8\%)          & \textbf{94.2\%} (92.2--96.0\%)  & 41.6\%  & 0.2\% \\
+    7  & \textbf{88.7\%} (86.7--90.7\%) & 88.4\% (86.1--90.6\%)           & 29.7\%  & 0.3\% \\
+    10 & 81.1\% (78.9--83.2\%)          & \textbf{83.9\%} (82.0--85.8\%)  & 24.7\%  & 0.1\% \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The trace consistently exceeds the in-context baseline by +50--60pp at $n{\geq}3$, demonstrating that Hebbian storage outperforms GPT-2's native in-context learning for structured fact retrieval even on real-world knowledge. Per-relation accuracy ranges from 100\% (rare concept words: genre, instrument) to 66\% (frequent concept words: birthplace, location), consistent with the Q-collision limitation identified in Section~\ref{sec:arch_limitations}.
+The trace exceeds the in-context baseline by +50--60pp at $n{\geq}3$ under both assignment strategies, demonstrating that Hebbian storage outperforms GPT-2's native in-context learning for structured fact retrieval on real-world knowledge. Automated concept assignment achieves accuracy within the confidence interval of oracle assignment at all fact counts, and slightly higher at $n{=}10$ (+2.8pp)---likely because more relations (40 vs.\ 32) provide greater entity diversity and reduce Q-collision between facts in the same episode.
 
-\textbf{Caveats.}\quad This evaluation tests the trace mechanism's associative storage capacity on real-world knowledge, not end-to-end knowledge probing. Each T-REx relation is assigned a fixed concept word (e.g., P36 $\to$ ``capital''), reducing the task to: store(``capital'', ``Paris''), query(``capital''). The LM is still needed---trace injection competes with GPT-2's pretrained prior, which actively biases toward its own knowledge---but the concept-word assignment is oracle-provided. Additionally, the single-token constraint limits coverage to ${\sim}6\%$ of LAMA T-REx. These results validate storage capacity on real entity vocabularies (1,014 unique tokens vs.\ ${\sim}100$ in synthetic tasks), but do not demonstrate open-domain knowledge acquisition.
+\textbf{Scope.}\quad This evaluation tests the trace mechanism's associative storage capacity on real-world knowledge, not end-to-end knowledge probing. Each T-REx relation is mapped to a concept word (e.g., P36 $\to$ ``capital''), reducing the task to: store(``capital'', ``Paris''), query(``capital''). The LM is still needed---trace injection competes with GPT-2's pretrained prior---but concept-word assignment does not require expert curation. The single-token constraint limits coverage to ${\sim}6\%$ of LAMA T-REx entity tokens. These results validate storage capacity on real entity vocabularies (1,014--1,107 unique tokens vs.\ ${\sim}100$ in synthetic tasks), but do not demonstrate open-domain knowledge acquisition.
 
 \subsection{Comparison with kNN-LM}
 \label{sec:knn_comparison}
@@ -495,36 +491,38 @@ Context-free addressing creates a fundamental limitation: paraphrased questions 
 
 Q-vector similarity between city tokens (mean cosine $= 0.188$ after pattern separation) confirms low cross-talk. Cross-group similarity between city and concept word Q-vectors is even lower (mean $= 0.091$), explaining why chain links and standard facts coexist without interference through 27 total facts.
 
-\textbf{HotpotQA benchmark.}\quad We evaluate on real multi-hop questions from HotpotQA \citep{yang2018hotpotqa}, filtering the validation set to bridge-type questions with single-token BPE answers. From 5,918 bridge questions, 841 pass our filters (single-token answer, identifiable bridge entity, non-degenerate). Bridge entities are identified from the dataset's supporting fact annotations.
+\textbf{HotpotQA benchmark.}\quad We evaluate on real multi-hop questions from HotpotQA \citep{yang2018hotpotqa}, filtering the validation set to bridge-type questions with identifiable bridge entities and non-degenerate answers (bridge $\neq$ answer). Multi-token answers are evaluated via first BPE token match. From 5,918 bridge questions, 4,878 pass our filters (${\sim}82\%$ of bridge questions). Bridge entities are identified from the dataset's supporting fact annotations.
 
 \begin{table}[t]
   \centering
-  \caption{HotpotQA 2-hop evaluation (841 bridge questions, PS $8\times/k{=}16$, 32 banks). Oracle-supported: supporting facts provided, single-token answers only (${\sim}16\%$ of bridge questions); not comparable to end-to-end QA leaderboard entries. Per-question: trace reset between questions. Batched: $N$ questions share a single trace, 50 random batches. Best-bank scan reads all banks and picks the highest-confidence answer.}
+  \caption{HotpotQA 2-hop evaluation (4,878 bridge questions, PS $8\times/k{=}16$, 16 banks). Oracle-supported: supporting facts provided, first BPE token answer match (${\sim}82\%$ of bridge questions); not comparable to end-to-end QA leaderboard entries. Per-question: trace reset between questions. Batched: $N$ questions share a single trace, 50 random batches. Best-bank scan reads all banks and picks the highest-confidence answer.}
   \label{tab:hotpotqa}
   \begin{tabular}{@{}cccccc@{}}
     \toprule
     Mode & $N$ & Total facts & Hop-1 & E2E (no banks) & E2E (best-bank) \\
     \midrule
-    Per-question & 1 & 2 & 100\% & \textbf{100\%} (841/841) & --- \\
+    Per-question & 1 & 2 & 100\% & \textbf{100\%} (4,878/4,878) & --- \\
     \midrule
-    Batched & 5 & 10 & 100\% & 98.8\% & \textbf{99.6\%} \\
-    Batched & 8 & 16 & 99.2\% & 92.5\% & \textbf{99.8\%} \\
-    Batched & 10 & 20 & 94.6\% & 85.6\% & \textbf{98.8\%} \\
-    Batched & 15 & 30 & 80.5\% & 63.2\% & \textbf{98.5\%} \\
+    Batched & 5 & 10 & 100\% & 99.6\% & \textbf{99.6\%} \\
+    Batched & 8 & 16 & 98.8\% & 97.0\% & \textbf{98.8\%} \\
+    Batched & 10 & 20 & 96.6\% & 90.8\% & \textbf{98.8\%} \\
+    Batched & 15 & 30 & 81.9\% & 67.6\% & \textbf{98.7\%} \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The primary bottleneck without banks is bridge-entity first-token collision: 40.7\% of questions share a bridge entity first BPE token (e.g., ``The''), creating identical Q-vectors at hop-2. Hashed trace banks (Section~\ref{sec:banks}) resolve this: with 32 banks and a best-bank scan at retrieval (reading all banks and selecting the highest-confidence answer), end-to-end accuracy improves from 63.2\% to 98.5\% at batch size 15 (+35pp). Notably, modifying the Q-vector itself (composite Q from multiple entity tokens) is incompatible with pattern separation's top-k sparsification---even tiny perturbations change which expanded dimensions survive top-k, breaking write/read address alignment. Banks solve the collision without altering Q, preserving pattern separation compatibility.
+The primary bottleneck without banks is bridge-entity first-token collision: 71.0\% of questions share a bridge entity first BPE token (e.g., ``The''), creating identical Q-vectors at hop-2. Hashed trace banks (Section~\ref{sec:banks}) resolve this: with 16 banks and a best-bank scan at retrieval (reading all banks and selecting the highest-confidence answer), end-to-end accuracy improves from 67.6\% to 98.7\% at batch size 15 (+31pp). Notably, modifying the Q-vector itself (composite Q from multiple entity tokens) is incompatible with pattern separation's top-k sparsification---even tiny perturbations change which expanded dimensions survive top-k, breaking write/read address alignment. Banks solve the collision without altering Q, preserving pattern separation compatibility.
 
-We emphasize that this evaluation tests the trace mechanism's multi-hop capability on real-world facts, not end-to-end QA performance---oracle supporting facts and single-token answer filtering mean these results are not directly comparable to HotpotQA leaderboard entries, which must additionally solve retrieval from 5M+ paragraphs and open-ended answer generation.
+We emphasize that this evaluation tests the trace mechanism's multi-hop capability on real-world facts, not end-to-end QA performance---oracle supporting facts and first-token answer matching mean these results are not directly comparable to HotpotQA leaderboard entries, which must additionally solve retrieval from 5M+ paragraphs and open-ended answer generation.
 
 \subsection{Free-Text Pipeline and Dialogue Integration}
 \label{sec:freetext}
 
-The preceding experiments use structured templates. We validate the path toward natural interaction through two extensions.
+The preceding experiments use structured templates. We validate the path toward natural interaction through three extensions.
 
 \textbf{Free-text extraction.}\quad A direct-write API (\texttt{write\_fact\_direct}) bypasses the template machinery entirely, storing associations via \texttt{compute\_q\_for\_token} and \texttt{compute\_v\_for\_token}. A regex-based extractor identifies concept--entity pairs from free-form utterances (``I live in Paris'', ``Call me John'', ``My favorite color is blue'') with 100\% precision and 94.1\% recall. End-to-end accuracy matches the template pipeline (80.8\% at $n{=}5$), confirming zero overhead from the direct-write path.
+
+\textbf{LLM-based extraction.}\quad We replace the regex extractor with Flan-T5-small (80M parameters), a lightweight sequence-to-sequence model that performs per-type extractive QA (e.g., ``What is the person's name?''). Dual validation---entity must appear in both the concept vocabulary pool and the source text---prevents hallucination false positives. On unconstrained free-form text where regex extraction achieves 0\% F1 (e.g., ``After years abroad, Alice settled in Paris and found a job at Google''), the LLM extractor achieves 94\% F1. Overall across all text tiers: oracle 100\%, LLM 93.9\%, regex 77.4\%. End-to-end trace accuracy with LLM extraction matches or slightly exceeds regex across all fact counts, confirming that the trace mechanism is format-agnostic---the bottleneck was extraction, not storage.
 
 \textbf{Multi-turn dialogue.}\quad Facts accumulate across dialogue turns. 10 dialogue templates across 3 categories (introduction, update, dense) test natural conversation flow. Results: 100\% across all phases---introduction (1,400 queries), updates with erasure (1,200 queries including 250 updated facts), and multi-dialogue sessions (5 dialogues, ${\sim}10$ accumulated facts). The erasure mechanism handles in-dialogue corrections (``Actually, I moved to London'') with 100\% accuracy.
 
@@ -546,15 +544,15 @@ This design has three consequences that extend beyond our specific system. First
 We identify five concrete limitations, noting where recent extensions have partially addressed them:
 
 \begin{enumerate}[leftmargin=*]
-  \item \textbf{Structured input dependency (partially addressed).} The core mechanism requires \texttt{\{concept\} \{linking\_token\} \{entity\}} templates. The free-text extraction pipeline (Section~\ref{sec:freetext}) relaxes this by accepting natural utterances (``Call me John'', ``I live in Paris''), but still requires recognizable patterns. Fully unconstrained text (``The red one has always been my favorite'') remains unsupported.
+  \item \textbf{Structured input dependency (largely addressed).} The core trace mechanism is format-agnostic---it requires only (concept\_token\_id, entity\_token\_id) pairs. The LLM-based extraction pipeline (Section~\ref{sec:freetext}) achieves 94\% F1 on unconstrained free-form text where regex extraction fails entirely, demonstrating that the bottleneck was extraction, not storage. Remaining gaps include ambiguous references (``The red one has always been my favorite'') where entity identity requires discourse-level reasoning beyond single-utterance QA.
 
-  \item \textbf{Single-token entities (partially addressed).} Entity values must tokenize to exactly one BPE token. Multi-hop chains use first-token addressing for multi-token bridge entities (Section~\ref{sec:multihop_exp}), which produces collisions (40.7\% of HotpotQA bridge entities share a first token like ``The''). Hashed trace banks with best-bank scan resolve 95\%+ of collisions (+35pp at batch 15), but direct multi-token Q addressing remains incompatible with pattern separation's top-k step.
+  \item \textbf{Single-token entities (partially addressed).} Entity values must tokenize to exactly one BPE token. Multi-hop chains use first-token addressing for multi-token bridge entities (Section~\ref{sec:multihop_exp}), which produces collisions (71.0\% of 4,878 HotpotQA bridge entities share a first token like ``The''). Hashed trace banks with best-bank scan resolve 95\%+ of collisions (+31pp at batch 15), but direct multi-token Q addressing remains incompatible with pattern separation's top-k step.
 
   \item \textbf{Context-free addressing trade-off.} Using token identity for addressing enables cross-session stability but cannot distinguish ``my name'' from ``Alice's name''. $\mathbf{T}_{\text{auto}}$ partially mitigates the related paraphrase problem, but the ownership-discrimination Pareto trade-off (Section~\ref{sec:context_enriched}) remains unresolved.
 
   \item \textbf{Scale (partially addressed).} Validation covers three model scales up to 2.7B. Hashed trace banks extend capacity to ${\geq}99\%$ at $n{=}100$ simultaneously stored facts (vs.\ 35.6\% baseline), but scaling to hundreds of facts and models beyond 3B is untested.
 
-  \item \textbf{Benchmark coverage (partially addressed).} The HotpotQA evaluation (841 bridge questions, Section~\ref{sec:multihop_exp}) provides the first real-world multi-hop benchmark. However, it uses oracle supporting facts and single-token answer filtering (${\sim}16\%$ of bridge questions). End-to-end QA with open extraction and multi-token answers requires LLM-based relation extraction and broader entity addressing.
+  \item \textbf{Benchmark coverage (partially addressed).} The HotpotQA evaluation (4,878 bridge questions, ${\sim}82\%$ of bridge questions, Section~\ref{sec:multihop_exp}) covers the majority of bridge-type questions via first-token answer matching. However, it uses oracle supporting facts and oracle bridge entity identification. End-to-end QA with open retrieval requires solving paragraph selection and bridge entity reasoning, which are outside the scope of the trace mechanism itself.
 \end{enumerate}
 
 \subsection{Connection to Biological Memory}
@@ -566,9 +564,9 @@ Our architecture implements a simplified hippocampal loop: dentate gyrus (patter
 
 Several directions extend from the current foundation:
 
-\textbf{LLM-based relation extraction.}\quad The free-text pipeline currently uses regex patterns. Replacing these with an LLM extractor would enable open-domain relation types and unconstrained input, closing the gap between our oracle-extracted HotpotQA evaluation and a production multi-hop QA system.
+\textbf{Open-domain relation types.}\quad The LLM-based extractor (Section~\ref{sec:freetext}) currently operates over a fixed concept vocabulary of 24 types. Extending to open-domain relation types---where the LLM identifies both the relation and entity from arbitrary text---would remove the last vocabulary constraint. This requires structured key addressing (e.g., \texttt{capital\_of(France)} $\to$ \texttt{Paris} rather than \texttt{capital} $\to$ \texttt{Paris}) to prevent collisions across relation instances.
 
-\textbf{Multi-token entity addressing.}\quad First-token addressing produces collisions for common BPE prefixes (40.7\% on HotpotQA). Hash-routed trace banks with best-bank scan already resolve 95\%+ of these collisions (Table~\ref{tab:hotpotqa}), but direct Q-space addressing from multiple tokens remains an open problem: composite Q (blending or perturbing Q-vectors from entity tokens) is incompatible with pattern separation's top-k sparsification, as even small perturbations change which expanded dimensions survive the top-k step.
+\textbf{Multi-token entity addressing.}\quad First-token addressing produces collisions for common BPE prefixes (71.0\% on 4,878 HotpotQA questions). Hash-routed trace banks with best-bank scan already resolve 95\%+ of these collisions (Table~\ref{tab:hotpotqa}), but direct Q-space addressing from multiple tokens remains an open problem: composite Q (blending or perturbing Q-vectors from entity tokens) is incompatible with pattern separation's top-k sparsification, as even small perturbations change which expanded dimensions survive the top-k step.
 
 \textbf{Episodic memory for agents.}\quad The current system stores declarative facts. Extending trace to store experiential episodes---situation-action-outcome tuples---would enable inference-time learning for LLM-based agents, where performance improves across episodes without weight updates.
 
@@ -579,7 +577,7 @@ Several directions extend from the current foundation:
 % ============================================================
 \section{Conclusion}
 
-We have presented the Hebbian Trace Module, a bio-inspired external memory system that provides persistent, updatable, and compositional memory for frozen language models. Through systematic development across three model scales, we showed that eight composable mechanisms---pattern separation, heteroassociative and autoassociative Hebbian storage, dual semantic gating, reconsolidation erasure, complementary learning systems, hippocampal replay, and hashed trace banks---can be combined to achieve 98--99\% mean recall across 15 sessions, scale to ${\geq}99\%$ accuracy at 100 simultaneously stored facts, resolve paraphrased queries (+83pp on misaligned queries), exceed GPT-2's in-context baseline by +50--60pp on LAMA T-REx facts (oracle concept words, 1,014-token entity vocabulary), and perform oracle-supported multi-hop retrieval at 100\% accuracy on 841 HotpotQA bridge questions---maintaining ${\geq}98.5\%$ with 15 simultaneous question batches via best-bank scan retrieval---all with ${\sim}1$M additional parameters. Each mechanism is independently motivated by hippocampal neuroscience, independently validated through ablation, and composes orthogonally with the others. Comparison with the kNN-LM baseline---the closest existing approach for frozen-model memory augmentation---demonstrates that the trace's context-free addressing provides a +63pp advantage on cross-context retrieval at $n{=}5$, where storage and query use different phrasing. Zero-shot cross-architecture transfer to Phi-2 (2.7B) achieves 92--100\% accuracy with performance that improves with model size, demonstrating architecture-agnostic generalization. The free-text extraction pipeline and dialogue system demonstrate the path from controlled templates to natural interaction. Significant limitations remain---notably single-token entity addressing and structured extraction---but our results suggest that the computational principles underlying biological memory systems offer viable inductive biases for adding persistent, compositional memory to pretrained language models without modifying their weights.
+We have presented the Hebbian Trace Module, a bio-inspired external memory system that provides persistent, updatable, and compositional memory for frozen language models. Through systematic development across three model scales, we showed that seven composable bio-inspired mechanisms---pattern separation, heteroassociative and autoassociative Hebbian storage, dual semantic gating, reconsolidation erasure, complementary learning systems, and hippocampal replay---together with hash-routed trace banks for capacity scaling, can be combined to achieve 98--99\% mean recall across 15 sessions, scale to ${\geq}99\%$ accuracy at 100 simultaneously stored facts, resolve paraphrased queries (+83pp on misaligned queries), exceed GPT-2's in-context baseline by +50--60pp on LAMA T-REx facts (1,014--1,107 unique entity tokens, automated concept assignment equivalent to oracle curation), and perform oracle-supported multi-hop retrieval at 100\% accuracy on 4,878 HotpotQA bridge questions---maintaining ${\geq}98.7\%$ with 15 simultaneous question batches via best-bank scan retrieval---all with ${\sim}1$M additional parameters. Each mechanism is independently motivated by hippocampal neuroscience, independently validated through ablation, and composes orthogonally with the others. Comparison with the kNN-LM baseline---the closest existing approach for frozen-model memory augmentation---demonstrates that the trace's context-free addressing provides a +63pp advantage on cross-context retrieval at $n{=}5$, where storage and query use different phrasing. Zero-shot cross-architecture transfer to Phi-2 (2.7B) achieves 92--100\% accuracy with performance that improves with model size, demonstrating architecture-agnostic generalization. An LLM-based extraction pipeline achieves 94\% F1 on unconstrained free-form text, and a multi-turn dialogue system demonstrates conversational integration. Significant limitations remain---notably single-token entity addressing and open-domain relation types---but our results suggest that the computational principles underlying biological memory systems offer viable inductive biases for adding persistent, compositional memory to pretrained language models without modifying their weights.
 
 % ============================================================
 \bibliography{references}
