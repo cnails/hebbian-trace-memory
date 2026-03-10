@@ -21,6 +21,7 @@ The trace module accumulates knowledge session by session. Facts stored in sessi
 | Mean recall across sessions | **98.6%** |
 | Session 15 recall (all 24 facts) | **98%** |
 | Multi-hop end-to-end (5 chains) | **100%** |
+| HotpotQA batched (15 Qs, best-bank) | **98.5%** |
 | Paraphrase resolution (T_auto) | **+83pp** on misaligned queries |
 | Fact types | 24 (name, city, company, color, food, pet, ...) |
 | Sessions | 15 (introduction + updates) |
@@ -143,6 +144,19 @@ Example: "Where does the person live?" → "Paris" → "What country?" → "Fran
 
 *Reproducible via `python exp_multihop.py --n-eval 50`.*
 
+### HotpotQA Multi-Hop (841 Bridge Questions)
+
+Real-world 2-hop reasoning on HotpotQA bridge questions (oracle supporting facts, single-token BPE answers). 40.7% of bridge entities share a first BPE token (e.g., "The Capitol" / "The Republic"), causing hop-2 collisions. Best-bank scan resolves this by reading all banks and picking the highest-confidence answer:
+
+| Batch size | No banks | Best-bank scan (32 banks) | Delta |
+|:----------:|:--------:|:-------------------------:|:-----:|
+| 5 | 98.8% | **99.6%** | +0.8pp |
+| 8 | 92.5% | **99.8%** | +7.3pp |
+| 10 | 85.6% | **98.8%** | +13.2pp |
+| 15 | 63.2% | **98.5%** | +35.3pp |
+
+*841 questions, 50 random batches per size. Best-bank scan requires no oracle entity tokens at retrieval.*
+
 ### Component Ablation (15-session demo)
 
 Each mechanism contributes independently:
@@ -227,7 +241,7 @@ The trace exceeds GPT-2's in-context baseline by +50-60pp at n>=3. Coverage is l
 ## Limitations
 
 - **Structured templates**: facts must follow "{concept} {linking_token} {entity}" pattern. The free-text pipeline uses regex extraction to bridge this gap.
-- **Single-token entities**: entity values must be single BPE tokens. Multi-token entities (e.g., "New York") are supported via auto-regressive generation with 100% completion for 2-token entities.
+- **Single-token entities** (partially addressed): entity values must be single BPE tokens. Multi-token entities use first-token addressing, which causes collisions (40.7% on HotpotQA). Hashed trace banks with best-bank scan resolve 95%+ of collisions (+35pp at batch 15). Direct multi-token Q addressing is incompatible with pattern separation's top-k step.
 - **Linking-token dependency**: storage is triggered by specific linking tokens ("is", "in", "at", "from"). Dual gates learned to filter these automatically.
 - **Template-locked retrieval**: questions must use matching concept words. T_auto resolves paraphrases with +83pp improvement on misaligned queries.
 - **No ownership discrimination**: the trace cannot distinguish "my name" from "Alice's name" — both produce the same context-free Q.

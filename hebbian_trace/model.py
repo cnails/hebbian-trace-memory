@@ -580,6 +580,23 @@ class HebbianTraceModule(nn.Module):
         activity = flat.abs().sum(dim=0)
         return activity.argmax().item() % self.n_trace_banks
 
+    def _compute_bank_id_from_tokens(self, token_ids: list[int]) -> int:
+        """Compute bank ID from multi-token hash.
+
+        Uses all token IDs to determine bank, so entities sharing
+        first token but differing in remaining tokens route to
+        different banks. Q address is unchanged (first-token only),
+        preserving pattern separation compatibility.
+
+        Args:
+            token_ids: list of BPE token IDs.
+
+        Returns:
+            bank_id: int in [0, n_trace_banks).
+        """
+        h = hash(tuple(token_ids))
+        return h % self.n_trace_banks
+
     def _resolve_trace(self, Q_sparse: torch.Tensor | None = None
                        ) -> tuple[torch.Tensor, int | None]:
         """Get trace matrix with optional bank routing.
@@ -600,6 +617,75 @@ class HebbianTraceModule(nn.Module):
             self._bank_traces[bank_id] = trace
         else:
             self.value_traces = trace
+
+    @torch.no_grad()
+    def write_direct_banked(self, Q: torch.Tensor, V: torch.Tensor,
+                            bank_id: int):
+        """Write to a specific bank, bypassing Q-based bank routing.
+
+        Q address is first-token only (PS-compatible). Bank selection
+        is determined externally (e.g., from multi-token hash).
+
+        Args:
+            Q: (H, d_trace) concept Q vector.
+            V: (H, d_trace) entity V vector.
+            bank_id: explicit bank to write to.
+        """
+        H = self.n_heads
+        denom = 1 * H
+
+        if self._pattern_sep_enabled:
+            Q_exp = self._sparse_expand(Q.unsqueeze(0).unsqueeze(2))
+            Q_store = Q_exp.squeeze(0).squeeze(1)
+        else:
+            Q_store = Q
+
+        if self._bank_traces is not None and bank_id is not None:
+            trace = self._bank_traces[bank_id]
+        else:
+            trace = self.value_traces
+
+        if self._erase_before_write:
+            Q_norms = Q_store.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+            Q_erase = Q_store / Q_norms
+            V_old = torch.einsum('hp,hpq->hq', Q_erase, trace)
+            erase = torch.einsum('hp,hq->hpq', Q_erase, V_old) / denom
+            trace = trace - self._erase_lr * erase
+
+        update = torch.einsum('hp,hq->hpq', Q_store, V) / denom
+        new_trace = self.trace_decay * trace + self.trace_lr * update
+
+        if self._bank_traces is not None and bank_id is not None:
+            self._bank_traces[bank_id] = new_trace
+        else:
+            self.value_traces = new_trace
+
+    @torch.no_grad()
+    def read_direct_banked(self, Q: torch.Tensor,
+                           bank_id: int) -> torch.Tensor:
+        """Read from a specific bank, bypassing Q-based bank routing.
+
+        Args:
+            Q: (H, d_trace) query vector.
+            bank_id: explicit bank to read from.
+
+        Returns:
+            retrieved: (d_model,) value projected to model space.
+        """
+        if self._pattern_sep_enabled:
+            Q_exp = self._sparse_expand(Q.unsqueeze(0).unsqueeze(2))
+            Q_addr = Q_exp.squeeze(0).squeeze(1)
+        else:
+            Q_addr = Q
+
+        if self._bank_traces is not None and bank_id is not None:
+            trace = self._bank_traces[bank_id]
+        else:
+            trace = self.value_traces
+
+        V_ret = torch.einsum('hp,hpq->hq', Q_addr, trace)
+        V_flat = V_ret.view(1, self.n_heads * self.d_trace)
+        return self.W_out(V_flat).squeeze(0)
 
     # -- Autoassociative Trace (CA3 Pattern Completion) --
 
@@ -881,6 +967,96 @@ class GPT2WithTrace(nn.Module):
         """
         Q = self.trace.compute_q_for_token(self._wte, token_id)
         retrieved = self.trace.read_direct(Q)
+        wte_weight = self._wte.weight.float()
+        logits = torch.matmul(retrieved, wte_weight.T)
+        cand_logits = logits[candidate_ids]
+        return candidate_ids[cand_logits.argmax().item()]
+
+    @torch.no_grad()
+    def retrieve_direct_best_bank(self, token_id: int,
+                                   candidate_ids: list[int]) -> int:
+        """Retrieve from the bank with highest confidence (all-bank scan).
+
+        Reads Q(token_id) from every bank and returns the answer with
+        the highest logit. No external bank routing needed — confidence
+        drives the selection. Cost: n_banks reads instead of 1.
+
+        Useful when the correct bank is unknown at retrieval time
+        (e.g., multi-hop chains where bridge entity tokens are predicted,
+        not given). Falls back to standard retrieve_direct when banks
+        are disabled.
+
+        Args:
+            token_id: BPE token for Q address.
+            candidate_ids: restrict prediction to these token IDs.
+
+        Returns:
+            predicted token ID (from candidate_ids).
+        """
+        Q = self.trace.compute_q_for_token(self._wte, token_id)
+        wte_weight = self._wte.weight.float()
+        cand_t = torch.tensor(candidate_ids,
+                               device=self.trace.value_traces.device)
+
+        best_logit = float('-inf')
+        best_pred = candidate_ids[0]
+
+        n_banks = self.trace.n_trace_banks
+        if n_banks <= 1 or self.trace._bank_traces is None:
+            return self.retrieve_direct(token_id, candidate_ids)
+
+        for bank_id in range(n_banks):
+            retrieved = self.trace.read_direct_banked(Q, bank_id)
+            logits = torch.matmul(retrieved, wte_weight.T)
+            cand_logits = logits[cand_t]
+            max_logit = cand_logits.max().item()
+            if max_logit > best_logit:
+                best_logit = max_logit
+                best_pred = candidate_ids[cand_logits.argmax().item()]
+
+        return best_pred
+
+    @torch.no_grad()
+    def write_fact_direct_banked(self, concept_token_id: int,
+                                 entity_token_id: int,
+                                 bank_token_ids: list[int]):
+        """Write fact using first-token Q but multi-token bank routing.
+
+        Q address uses concept_token_id only (PS-compatible).
+        Bank selection uses hash(bank_token_ids) — entities sharing
+        first token but differing in remaining tokens route to
+        different banks, eliminating collision interference.
+
+        Args:
+            concept_token_id: BPE ID for Q address (first token).
+            entity_token_id: BPE ID for V (answer).
+            bank_token_ids: all entity token IDs for bank routing.
+        """
+        Q = self.trace.compute_q_for_token(self._wte, concept_token_id)
+        V = self.trace.compute_v_for_token(self._wte, entity_token_id)
+        bank_id = self.trace._compute_bank_id_from_tokens(bank_token_ids)
+        self.trace.write_direct_banked(Q, V, bank_id)
+
+    @torch.no_grad()
+    def retrieve_direct_banked(self, token_id: int,
+                               candidate_ids: list[int],
+                               bank_token_ids: list[int]) -> int:
+        """Direct trace retrieval from multi-token-routed bank.
+
+        Q address uses token_id only. Bank selection uses
+        hash(bank_token_ids).
+
+        Args:
+            token_id: BPE token for Q address (first token).
+            candidate_ids: restrict prediction to these token IDs.
+            bank_token_ids: all entity token IDs for bank routing.
+
+        Returns:
+            predicted token ID (from candidate_ids).
+        """
+        Q = self.trace.compute_q_for_token(self._wte, token_id)
+        bank_id = self.trace._compute_bank_id_from_tokens(bank_token_ids)
+        retrieved = self.trace.read_direct_banked(Q, bank_id)
         wte_weight = self._wte.weight.float()
         logits = torch.matmul(retrieved, wte_weight.T)
         cand_logits = logits[candidate_ids]
