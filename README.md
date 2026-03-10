@@ -2,7 +2,7 @@
 
 **Persistent cross-session memory for frozen LLMs via bio-inspired Hebbian trace module.**
 
-An external memory module (~1.1M parameters) that attaches to frozen LLMs and provides persistent fact storage, paraphrase resolution, and multi-hop reasoning across sessions — without fine-tuning, without RAG, without retraining. Validated on GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B).
+An external memory module (~1.1M parameters) that attaches to frozen LLMs and provides persistent fact storage, paraphrase resolution, and multi-hop retrieval across sessions — without fine-tuning, without RAG, without retraining. Validated on GPT-2 Small (124M), GPT-2 Medium (355M), and Phi-2 (2.7B).
 
 ---
 
@@ -71,7 +71,7 @@ python evaluate.py                # 50 episodes (quick, ~5 min)
 python evaluate.py --n-eval 100   # 100 episodes (paper results)
 python exp_lama.py --quick        # LAMA benchmark (~2 min)
 python exp_lama.py --n-eval 100   # LAMA full run (~10 min)
-python exp_multihop.py --quick    # Multi-hop reasoning (~2 min)
+python exp_multihop.py --quick    # Multi-hop retrieval (~2 min)
 python exp_paraphrase.py --quick  # Paraphrase resolution (~2 min)
 python capacity_test.py --banks 16  # Capacity with hashed banks (~10 min)
 ```
@@ -92,14 +92,14 @@ python demo.py --sessions 15      # full 15-session demo
 
 Facts are stored in separate forward passes, then queried with question-only input (no in-context facts). Any accuracy above ~4% comes entirely from the trace module.
 
-| n_facts | Cross-context | In-context (GPT-2) | No trace | Gap |
-|---------|:------------:|:------------------:|:--------:|:---:|
-| 1 | **100.0%** | 99.0% | 6.0% | +94.0pp |
-| 3 | **89.7%** | 73.0% | 4.3% | +85.3pp |
-| 5 | **85.4%** | 62.8% | 3.2% | +82.2pp |
-| 7 | **82.0%** | 61.6% | 4.3% | +77.7pp |
+| n_facts | Cross-context | kNN-LM | In-context (GPT-2) | No trace |
+|---------|:------------:|:------:|:------------------:|:--------:|
+| 1 | **100.0%** | 100.0% | 99.0% | 6.0% |
+| 3 | **89.7%** | 37.0% | 73.0% | 4.3% |
+| 5 | **85.4%** | 22.4% | 62.8% | 3.2% |
+| 7 | **82.0%** | 14.9% | 61.6% | 4.3% |
 
-Cross-context retrieval **exceeds GPT-2's own in-context learning** at all fact counts.
+Cross-context retrieval **exceeds both GPT-2's in-context learning and kNN-LM** (Khandelwal et al., 2020) at all fact counts. kNN-LM uses contextual hidden states, so it fails when query phrasing differs from storage (+63pp trace advantage at n=5).
 
 *100 episodes, seed=42. Reproducible via `python evaluate.py --n-eval 100`.*
 
@@ -125,7 +125,7 @@ T_auto stores 17 template-driven Q→Q pairs once (static template knowledge). T
 
 *Reproducible via `python exp_paraphrase.py --n-eval 50`.*
 
-### Multi-Hop Reasoning
+### Multi-Hop Retrieval
 
 Two-hop trace chains with zero new parameters: decode intermediate via `W_out @ wte.T → argmax`, re-encode as Q, query T_v again.
 
@@ -146,7 +146,7 @@ Example: "Where does the person live?" → "Paris" → "What country?" → "Fran
 
 ### HotpotQA Multi-Hop (841 Bridge Questions)
 
-Real-world 2-hop reasoning on HotpotQA bridge questions (oracle supporting facts, single-token BPE answers). 40.7% of bridge entities share a first BPE token (e.g., "The Capitol" / "The Republic"), causing hop-2 collisions. Best-bank scan resolves this by reading all banks and picking the highest-confidence answer:
+Real-world 2-hop retrieval on HotpotQA bridge questions (oracle supporting facts, single-token BPE answers). 40.7% of bridge entities share a first BPE token (e.g., "The Capitol" / "The Republic"), causing hop-2 collisions. Best-bank scan resolves this by reading all banks and picking the highest-confidence answer:
 
 | Batch size | No banks | Best-bank scan (32 banks) | Delta |
 |:----------:|:--------:|:-------------------------:|:-----:|
@@ -211,19 +211,19 @@ The trace mechanism generalizes across model architectures:
 
 Bigger models produce better trace recall. Phi-2 exceeds GPT-2 Small by +15.5pp at n=5.
 
-### LAMA Knowledge Probes
+### LAMA T-REx (Real Entity Vocabulary)
 
-Evaluation on the standard LAMA T-REx benchmark (Petroni et al., 2019) with real-world Wikidata facts:
+Storage capacity test on real Wikidata facts from LAMA T-REx (Petroni et al., 2019). Each relation is assigned an oracle concept word (e.g., P36 → "capital"), simplifying the task to associative storage. Tests trace on realistic entity vocabulary (1,014 unique tokens):
 
-| n_facts | Cross-context (trace) | In-context (GPT-2) | No memory |
-|---------|:--------------------:|:-----------------:|:---------:|
-| 1 | **100.0%** | 95.0% | 1.0% |
-| 3 | **94.0%** | 43.3% | 0.3% |
-| 5 | **93.6%** | 41.6% | 0.2% |
-| 7 | **88.7%** | 29.7% | 0.3% |
-| 10 | **81.2%** | 24.7% | 0.1% |
+| n_facts | Cross-context (trace) | kNN-LM | In-context (GPT-2) | No memory |
+|---------|:--------------------:|:------:|:-----------------:|:---------:|
+| 1 | **100.0%** | 100.0% | 95.0% | 1.0% |
+| 3 | 94.0% | **94.3%** | 43.3% | 0.3% |
+| 5 | 93.8% | **94.2%** | 41.6% | 0.2% |
+| 7 | 88.6% | **89.3%** | 29.7% | 0.3% |
+| 10 | 81.4% | **82.9%** | 24.7% | 0.1% |
 
-The trace exceeds GPT-2's in-context baseline by +50-60pp at n>=3. Coverage is limited to ~6% of LAMA T-REx due to the single-token entity constraint.
+The trace and kNN-LM achieve comparable accuracy on LAMA because queries ("capital is") are exact prefixes of storage text ("capital is Paris."), giving kNN-LM zero-noise hidden-state matching via causal attention. This contrasts with cross-context retrieval where kNN-LM degrades to near-random (see above). Note: oracle concept-word assignment means this tests associative storage capacity, not open-domain knowledge probing. Coverage limited to ~6% of LAMA T-REx (single-token entity constraint).
 
 *100 episodes, seed=42. Reproducible via `python exp_lama.py --n-eval 100`.*
 
@@ -259,7 +259,7 @@ hebbian-trace-memory/
 ├── demo.py                # Multi-session demo
 ├── evaluate.py            # Flagship evaluation with RAG baselines
 ├── exp_lama.py            # LAMA T-REx benchmark
-├── exp_multihop.py        # Multi-hop reasoning via trace chains
+├── exp_multihop.py        # Multi-hop retrieval via trace chains
 ├── exp_paraphrase.py      # Paraphrase resolution via T_auto
 ├── capacity_test.py       # Capacity stress test (1-100 facts)
 ├── medium_test.py         # GPT-2 Medium (355M) transfer test

@@ -37,6 +37,7 @@ from hebbian_trace.rag_baselines import (
     EmbeddingRAGStore,
     evaluate_rag,
     evaluate_retrieval_accuracy,
+    evaluate_knn,
 )
 
 
@@ -90,9 +91,9 @@ def _run_table(model, fact_types, tokenizer, wte_weight,
           f"{n_eval} episodes")
     print()
     w = 17  # column width for 'acc [lo, hi]'
-    sep = "-" * (6 + 6 * (w + 2))
+    sep = "-" * (6 + 7 * (w + 2))
     print(sep)
-    print(f"  {'n':>3}  {'Trace':>{w}}  {'In-ctx':>{w}}  "
+    print(f"  {'n':>3}  {'Trace':>{w}}  {'kNN-LM':>{w}}  {'In-ctx':>{w}}  "
           f"{'RAG-Orc':>{w}}  {'RAG-Emb':>{w}}  {'RAG-TF':>{w}}  "
           f"{'No-trace':>{w}}")
     print(sep)
@@ -120,9 +121,13 @@ def _run_table(model, fact_types, tokenizer, wte_weight,
         rag_tfidf = evaluate_rag(
             model, episodes, fact_types, tfidf_store, top_k=1)
 
+        knn = evaluate_knn(model, episodes, fact_types,
+                           k=32, temperature=10.0, lam=0.25)
+
         dt = time.time() - t0
 
         print(f"  {n_facts:>3}  {_fmt(cross):>{w}}  "
+              f"{_fmt(knn):>{w}}  "
               f"{_fmt(baseline):>{w}}  "
               f"{_fmt(rag_oracle):>{w}}  "
               f"{_fmt(rag_embed):>{w}}  "
@@ -190,18 +195,19 @@ def run_evaluation(n_eval: int = 50,
 
     # Legend
     print("  Trace:     Hebbian trace retrieval (question-only input)")
+    print("  kNN-LM:    kNN over GPT-2 hidden states (Khandelwal+ 2020)")
     print("  In-ctx:    All facts + question in one pass (GPT-2 native)")
     print("  RAG-Orc:   RAG with perfect retrieval (upper bound)")
     print("  RAG-Emb:   RAG with GPT-2 embedding similarity retrieval")
     print("  RAG-TF:    RAG with TF-IDF keyword retrieval")
     print("  No-trace:  Question-only, no memory (expected ~random)")
     print()
-    print("  Note: Retrieval accuracy is 100% for both RAG-Emb and RAG-TF")
-    print("  at all fact counts — the retrieval step always finds the correct")
-    print("  fact. The accuracy gap between RAG and Trace comes entirely from")
-    print("  the reader model: GPT-2's LM prior dominates over in-context signal")
-    print("  when the entity candidate vocabulary is large (229 tokens).")
-    print("  The Hebbian trace overcomes this via direct logit injection.")
+    print("  kNN-LM stores (hidden_state, next_token) pairs from fact passages")
+    print("  and retrieves by nearest-neighbor search in hidden-state space.")
+    print("  Unlike RAG, it does not prepend facts in-context. Like the trace,")
+    print("  it operates at the logit/probability level. However, it uses")
+    print("  contextual hidden states (context-dependent) vs the trace's")
+    print("  context-free Q addressing (context-independent).")
     print()
 
 

@@ -1,13 +1,14 @@
-"""RAG baselines for comparison with Hebbian trace memory.
+"""Baselines for comparison with Hebbian trace memory.
 
-Implements three retrieval-augmented generation variants using the same
-evaluation protocol as the trace module:
+RAG baselines (in-context retrieval):
   - OracleRAG: perfect retrieval (upper bound)
   - EmbeddingRAG: cosine similarity over GPT-2 wte mean-pool
   - TFIDFRAG: keyword-based TF-IDF retrieval
 
-All baselines use frozen GPT-2 as the reader model with retrieved facts
-prepended to the query in-context.
+kNN-LM baseline (external memory without fine-tuning):
+  - KNNMemoryStore: nearest-neighbor over GPT-2 hidden states
+    Reference: Khandelwal et al., 2020 "Generalization through
+    Memorization: Nearest Neighbor Language Models"
 """
 
 import math
@@ -420,3 +421,183 @@ def run_rag_multisession(
                 retention_data.setdefault(age, []).append(float(correct))
 
     return session_results, retention_data
+
+
+# ══════════════════════════════════════════════════════════════════
+#  kNN-LM BASELINE
+# ══════════════════════════════════════════════════════════════════
+
+class KNNMemoryStore:
+    """kNN-LM baseline (Khandelwal et al., 2020).
+
+    Stores (hidden_state, next_token) pairs from fact passages.
+    At prediction time, finds k nearest neighbors by L2 distance
+    over GPT-2 last-layer hidden states, builds a kNN distribution,
+    and interpolates with the LM's own softmax distribution.
+
+    Unlike the Hebbian trace (context-free Q addressing), kNN-LM
+    uses contextual hidden states — the same fact stored in different
+    contexts produces different representations.
+    """
+
+    def __init__(self, model, k: int = 8, temperature: float = 10.0,
+                 lam: float = 0.25):
+        """
+        Args:
+            model: GPT2WithTrace (uses .gpt2 for hidden states).
+            k: number of nearest neighbors.
+            temperature: softmax temperature for distance weighting.
+            lam: interpolation weight (0 = pure LM, 1 = pure kNN).
+        """
+        self.model = model
+        self.k = k
+        self.temperature = temperature
+        self.lam = lam
+        self._keys: list[torch.Tensor] = []   # hidden states (d_model,)
+        self._values: list[int] = []           # next-token IDs
+        self._key_matrix: torch.Tensor | None = None
+
+    def reset(self):
+        self._keys = []
+        self._values = []
+        self._key_matrix = None
+
+    @torch.no_grad()
+    def store_passage(self, token_ids: list[int]):
+        """Store (hidden_state_t, next_token_{t+1}) for each position.
+
+        Uses post-ln_f hidden states (same representation space as the
+        logit projection), matching the original kNN-LM setup.
+        """
+        if len(token_ids) < 2:
+            return
+
+        device = next(self.model.parameters()).device
+        input_tensor = torch.tensor(
+            [token_ids], dtype=torch.long, device=device)
+        outputs = self.model.gpt2(
+            input_tensor, return_dict=True, output_hidden_states=True)
+
+        # Post-ln_f hidden states for better retrieval
+        raw_hidden = outputs.hidden_states[-1]       # (1, S, d_model)
+        hidden = self.model.gpt2.transformer.ln_f(raw_hidden)
+        hidden = hidden[0]                           # (S, d_model)
+
+        for t in range(len(token_ids) - 1):
+            self._keys.append(hidden[t])
+            self._values.append(token_ids[t + 1])
+        self._key_matrix = None  # invalidate cache
+
+    def _get_key_matrix(self) -> torch.Tensor | None:
+        if self._key_matrix is None and self._keys:
+            self._key_matrix = torch.stack(self._keys)
+        return self._key_matrix
+
+    @torch.no_grad()
+    def predict(self, query_ids: list[int],
+                entity_ids: list[int]) -> int:
+        """kNN-LM prediction at last query position.
+
+        1. Run query through GPT-2, get hidden state and LM logits.
+        2. Find k nearest neighbors among stored hidden states.
+        3. Build kNN probability distribution from neighbor tokens.
+        4. Interpolate: P(w) = λ·P_knn(w) + (1-λ)·P_lm(w).
+        5. Return argmax restricted to entity_ids.
+        """
+        device = next(self.model.parameters()).device
+        input_tensor = torch.tensor(
+            [query_ids], dtype=torch.long, device=device)
+        outputs = self.model.gpt2(
+            input_tensor, return_dict=True, output_hidden_states=True)
+
+        lm_logits = outputs.logits[0, -1, :]  # (vocab_size,)
+
+        # Query hidden state (post-ln_f, same space as stored keys)
+        raw_hidden = outputs.hidden_states[-1]
+        query_h = self.model.gpt2.transformer.ln_f(raw_hidden)[0, -1, :]
+
+        key_matrix = self._get_key_matrix()
+        if key_matrix is None:
+            # No stored data — fall back to pure LM
+            entity_logits = lm_logits[entity_ids]
+            return entity_ids[entity_logits.argmax().item()]
+
+        # L2 distances to all stored keys
+        dists = torch.cdist(
+            query_h.unsqueeze(0), key_matrix).squeeze(0)  # (N,)
+
+        k = min(self.k, key_matrix.shape[0])
+        topk_dists, topk_idx = dists.topk(k, largest=False)
+
+        # kNN probability distribution
+        knn_probs = torch.zeros_like(lm_logits)
+        weights = torch.softmax(-topk_dists / self.temperature, dim=0)
+        for i in range(k):
+            knn_probs[self._values[topk_idx[i].item()]] += weights[i]
+
+        # LM probability distribution
+        lm_probs = torch.softmax(lm_logits, dim=0)
+
+        # Interpolate
+        final_probs = self.lam * knn_probs + (1 - self.lam) * lm_probs
+
+        # Restrict to entity candidates
+        entity_t = torch.tensor(entity_ids, device=device)
+        entity_probs = final_probs[entity_t]
+        return entity_ids[entity_probs.argmax().item()]
+
+
+def evaluate_knn(
+    model,
+    episodes: list[EvalEpisode],
+    fact_types: list[FactType],
+    k: int = 8,
+    temperature: float = 10.0,
+    lam: float = 0.25,
+    verbose: bool = False,
+) -> EvalResults:
+    """Evaluate kNN-LM baseline using same protocol as trace evaluation.
+
+    Write phase: store (hidden_state, next_token) pairs from fact passages.
+    Read phase: retrieve by kNN, interpolate with LM distribution.
+
+    Facts are stored individually (one forward pass per fact), not as
+    cumulative replay sequences.
+    """
+    knn = KNNMemoryStore(model, k=k, temperature=temperature, lam=lam)
+    model.eval()
+    model.set_trace_mode(use=False, update=False)
+    model.reset_traces()
+
+    entity_ids = get_all_entity_ids(fact_types)
+    total_correct = 0
+    total_queries = 0
+    per_episode: list[float] = []
+
+    for ep_idx, episode in enumerate(episodes):
+        knn.reset()
+
+        # Write phase: store each fact's hidden states
+        for type_name, entity_name, entity_bpe_id, fact_bpe_ids in episode.facts:
+            knn.store_passage(fact_bpe_ids)
+
+        # Read phase: kNN + LM interpolation
+        ep_correct = 0
+        for query_ids, answer_id, type_name in episode.test_queries:
+            pred_id = knn.predict(query_ids, entity_ids)
+            if pred_id == answer_id:
+                ep_correct += 1
+            total_queries += 1
+
+        total_correct += ep_correct
+        per_episode.append(ep_correct / max(len(episode.test_queries), 1))
+
+        if verbose and (ep_idx + 1) % 10 == 0:
+            print(f"  Episode {ep_idx+1}: {per_episode[-1]:.0%} "
+                  f"(running: {total_correct/total_queries:.1%})")
+
+    return EvalResults(
+        accuracy=total_correct / max(total_queries, 1),
+        n_correct=total_correct, n_total=total_queries,
+        per_episode_acc=per_episode,
+    )

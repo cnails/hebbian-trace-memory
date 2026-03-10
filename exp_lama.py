@@ -454,6 +454,71 @@ def eval_baseline(
                    per_relation_n=dict(rel_n), ci_lo=lo, ci_hi=hi)
 
 
+def eval_knn_lm(
+    model, episodes: list[Episode], entity_ids: list[int],
+    k: int = 8, temperature: float = 10.0, lam: float = 0.25,
+    verbose: bool = False,
+) -> Results:
+    """kNN-LM baseline (Khandelwal et al., 2020).
+
+    Stores (hidden_state, next_token) from fact passages, retrieves by
+    nearest neighbor, interpolates with LM distribution.
+
+    On LAMA, queries are exact prefixes of storage text, so causal
+    attention produces identical hidden states — kNN-LM should achieve
+    near-perfect accuracy (this is the easy case for kNN-LM).
+    """
+    from hebbian_trace.rag_baselines import KNNMemoryStore
+
+    device = next(model.parameters()).device
+    model.eval()
+    model.set_trace_mode(use=False, update=False)
+    model.reset_traces()
+
+    knn = KNNMemoryStore(model, k=k, temperature=temperature, lam=lam)
+
+    total_c, total_n = 0, 0
+    per_ep: list[float] = []
+    rel_c: dict[str, int] = {}
+    rel_n: dict[str, int] = {}
+
+    for i, ep in enumerate(episodes):
+        knn.reset()
+
+        # Store each fact's hidden states
+        for fact in ep.facts:
+            knn.store_passage(fact.storage_ids)
+
+        # Query via kNN-LM
+        correct = 0
+        for fact in ep.facts:
+            pred = knn.predict(fact.query_ids, entity_ids)
+            ok = pred == fact.obj_bpe_id
+            if ok:
+                correct += 1
+                rel_c[fact.predicate_id] = rel_c.get(
+                    fact.predicate_id, 0) + 1
+            rel_n[fact.predicate_id] = rel_n.get(
+                fact.predicate_id, 0) + 1
+
+        total_c += correct
+        total_n += len(ep.facts)
+        per_ep.append(correct / max(len(ep.facts), 1))
+
+        if verbose and (i + 1) % 20 == 0:
+            print(f"    ep {i+1}: running "
+                  f"{total_c/max(total_n, 1):.1%}")
+
+    acc = total_c / max(total_n, 1)
+    lo, hi = bootstrap_ci(per_ep)
+    rel_acc = {p: rel_c.get(p, 0) / max(rel_n.get(p, 0), 1)
+               for p in rel_n}
+
+    return Results(accuracy=acc, n_correct=total_c, n_total=total_n,
+                   per_episode=per_ep, per_relation_acc=rel_acc,
+                   per_relation_n=dict(rel_n), ci_lo=lo, ci_hi=hi)
+
+
 def eval_no_memory(
     model, episodes: list[Episode], entity_ids: list[int],
 ) -> Results:
@@ -582,18 +647,24 @@ def run(
         episodes = make_episodes(filtered, n_eval, nf,
                                  seed=seed + nf * 1000)
 
-        print("  [1/3] Cross-context (trace)...")
+        print("  [1/4] Cross-context (trace)...")
         cross = eval_cross_context(model, episodes, entity_ids,
                                    verbose=verbose)
 
-        print("  [2/3] In-context baseline...")
+        print("  [2/4] kNN-LM...")
+        knn = eval_knn_lm(model, episodes, entity_ids,
+                          k=32, temperature=10.0, lam=0.25,
+                          verbose=verbose)
+
+        print("  [3/4] In-context baseline...")
         base = eval_baseline(model, episodes, entity_ids, tokenizer)
 
-        print("  [3/3] No memory...")
+        print("  [4/4] No memory...")
         nomem = eval_no_memory(model, episodes, entity_ids)
 
         all_results[nf] = {
             "cross_context": cross,
+            "knn_lm": knn,
             "baseline": base,
             "no_memory": nomem,
         }
@@ -601,6 +672,7 @@ def run(
         print(f"\n  {'Condition':>20} {'Accuracy':>10} {'95% CI':>16}")
         print(f"  {'─' * 50}")
         for name, res in [("Cross-context", cross),
+                          ("kNN-LM", knn),
                           ("In-context", base),
                           ("No memory", nomem)]:
             print(f"  {name:>20} {res.accuracy:>9.1%} "
@@ -667,16 +739,17 @@ def run(
     print(f"\n{'═' * 70}")
     print("  LAMA BENCHMARK SUMMARY")
     print(f"{'═' * 70}")
-    print(f"  {'n':>4} {'Cross-ctx':>10} {'In-ctx':>10} "
-          f"{'No-mem':>10} {'Trace-NoMem':>12}")
-    print(f"  {'─' * 50}")
+    print(f"  {'n':>4} {'Cross-ctx':>10} {'kNN-LM':>10} {'In-ctx':>10} "
+          f"{'No-mem':>10} {'Trace-kNN':>10}")
+    print(f"  {'─' * 58}")
     for nf in n_facts_list:
         c = all_results[nf]["cross_context"].accuracy
+        k = all_results[nf]["knn_lm"].accuracy
         b = all_results[nf]["baseline"].accuracy
         nm = all_results[nf]["no_memory"].accuracy
-        gap = c - nm
-        print(f"  {nf:>4} {c:>9.1%} {b:>9.1%} "
-              f"{nm:>9.1%} {gap:>+11.1%}")
+        gap = c - k
+        print(f"  {nf:>4} {c:>9.1%} {k:>9.1%} {b:>9.1%} "
+              f"{nm:>9.1%} {gap:>+9.1%}")
 
     print(f"\n  Entities: {n_entities}, "
           f"random: {rnd_chance:.2%}, "
