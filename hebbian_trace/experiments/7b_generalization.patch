@@ -1,0 +1,74 @@
+# 7B Model Generalization Patch for Public Repo
+# Apply from /Users/cnails/hebbian-trace-memory/ to enable 7B models
+# Reverted in public repo to keep it GPT-2-only
+#
+# Changes:
+#   model.py: GPT2LMHeadModel -> AutoModelForCausalLM, torch_dtype, hidden_size
+#   tasks.py: GPT2Tokenizer -> PreTrainedTokenizerBase
+#   evaluate.py, exp_lama.py, exp_multihop.py, exp_paraphrase.py: AutoTokenizer
+#   rag_baselines.py: tokenizer generalization
+#
+# To re-apply quickly, make these changes:
+
+## hebbian_trace/model.py
+
+# Line 29: import
+-from transformers import GPT2LMHeadModel
++from transformers import AutoModelForCausalLM
+
+# Line ~138: compute_qv tok_embed
+-            tok_embed = wte(input_ids)
++            tok_embed = wte(input_ids).float()  # cast to fp32 for trace ops
+
+# Class GPT2WithTrace.__init__:
+-        self.gpt2 = GPT2LMHeadModel.from_pretrained(model_name)
+-        self.gpt2.requires_grad_(False)
+-        self.gpt2.eval()
+-        d_model = self.gpt2.config.n_embd
++        load_kwargs = {"trust_remote_code": True}
++        if torch_dtype is not None:
++            load_kwargs["torch_dtype"] = torch_dtype
++        self.base_model = AutoModelForCausalLM.from_pretrained(
++            model_name, **load_kwargs)
++        self.base_model.requires_grad_(False)
++        self.base_model.eval()
++        self.gpt2 = self.base_model  # backward compat alias
++        d_model = self.base_model.config.hidden_size
++        self._wte_cached = self.base_model.get_input_embeddings()
+
+# Add torch_dtype param to __init__ signature:
+     def __init__(self, ..., model_name: str = 'gpt2',
++                 torch_dtype=None,
+                  device: str | None = None):
+
+# forward():
+-        outputs = self.gpt2(input_ids, return_dict=True)
++        outputs = self.base_model(input_ids, return_dict=True)
+-        wte = self.gpt2.transformer.wte
++        wte = self._wte_cached
+# trace logits (fp16 safety):
+-            trace_logits = torch.matmul(retrieved, wte.weight.T)
+-            logits = logits + self.trace.alpha * trace_logits
++            wte_weight = wte.weight.float()
++            trace_logits = torch.matmul(retrieved, wte_weight.T)
++            logits = logits + self.trace.alpha * trace_logits.to(logits.dtype)
+
+# _wte property:
+-        return self.gpt2.transformer.wte
++        return self._wte_cached
+
+## hebbian_trace/tasks.py
+# All GPT2Tokenizer type hints -> PreTrainedTokenizerBase
+-from transformers import GPT2Tokenizer
++from transformers import PreTrainedTokenizerBase
+
+## evaluate.py, exp_lama.py, exp_multihop.py, exp_paraphrase.py
+-from transformers import GPT2Tokenizer
++from transformers import AutoTokenizer
+# And GPT2Tokenizer.from_pretrained('gpt2') -> AutoTokenizer.from_pretrained(model_name)
+
+## evaluate.py specific:
+-    gpt2_params = sum(p.numel() for p in model.gpt2.parameters())
++    base_params = sum(p.numel() for p in model.base_model.parameters())
+-    wte_weight = model.gpt2.transformer.wte.weight.detach().cpu()
++    wte_weight = model._wte.weight.detach().cpu()

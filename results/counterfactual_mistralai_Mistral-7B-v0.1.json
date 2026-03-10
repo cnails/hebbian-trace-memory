@@ -1,0 +1,28 @@
+{
+  "model": "mistralai/Mistral-7B-v0.1",
+  "params": "7B",
+  "alpha": 1000.0,
+  "phase": "counterfactual",
+  "n_valid_facts": 18,
+  "n_eval": 50,
+  "results": {
+    "1": {
+      "prior_acc": 0.0,
+      "trace_acc": 0.7,
+      "override_delta": 0.7,
+      "n_queries": 50
+    },
+    "3": {
+      "prior_acc": 0.0,
+      "trace_acc": 0.5266666666666666,
+      "override_delta": 0.5266666666666666,
+      "n_queries": 150
+    },
+    "5": {
+      "prior_acc": 0.0,
+      "trace_acc": 0.484,
+      "override_delta": 0.484,
+      "n_queries": 250
+    }
+  }
+}

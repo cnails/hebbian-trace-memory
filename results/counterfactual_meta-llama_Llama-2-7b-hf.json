@@ -1,0 +1,28 @@
+{
+  "model": "meta-llama/Llama-2-7b-hf",
+  "params": "7B",
+  "alpha": 10.0,
+  "phase": "counterfactual",
+  "n_valid_facts": 18,
+  "n_eval": 50,
+  "results": {
+    "1": {
+      "prior_acc": 0.04,
+      "trace_acc": 0.64,
+      "override_delta": 0.6,
+      "n_queries": 50
+    },
+    "3": {
+      "prior_acc": 0.04666666666666667,
+      "trace_acc": 0.5533333333333333,
+      "override_delta": 0.5066666666666667,
+      "n_queries": 150
+    },
+    "5": {
+      "prior_acc": 0.048,
+      "trace_acc": 0.516,
+      "override_delta": 0.468,
+      "n_queries": 250
+    }
+  }
+}

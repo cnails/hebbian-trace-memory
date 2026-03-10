@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,27 +8,42 @@ build/
 .eggs/
 *.egg
 
+# Virtual environment
 .venv/
 venv/
 env/
 
+# Large model checkpoints
 *.pth
 *.ckpt
+models/
 
 # Allow shipped weights
 !weights/trace_module.pt
 
-# Downloaded datasets
+# Downloaded datasets (354MB — see README for download instructions)
 data/
 
-# Evaluation results (regenerable)
-results/
+# Environment / secrets
+.env
 
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db
 
+# Logs
 *.log
-.idea/
-.vscode/
-*.swp
-*.swo
+
+# Claude local config
+.claude/
+
+# Internal docs (not for public)
+PROJECT_OVERVIEW.md
+ROADMAP.md
+CLAUDE.md

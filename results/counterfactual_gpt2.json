@@ -1,0 +1,28 @@
+{
+  "model": "gpt2",
+  "params": "124M",
+  "alpha": 0.5,
+  "phase": "counterfactual",
+  "n_valid_facts": 20,
+  "n_eval": 50,
+  "results": {
+    "1": {
+      "prior_acc": 0.0,
+      "trace_acc": 0.96,
+      "override_delta": 0.96,
+      "n_queries": 50
+    },
+    "3": {
+      "prior_acc": 0.0,
+      "trace_acc": 0.9,
+      "override_delta": 0.9,
+      "n_queries": 150
+    },
+    "5": {
+      "prior_acc": 0.0,
+      "trace_acc": 0.804,
+      "override_delta": 0.804,
+      "n_queries": 250
+    }
+  }
+}
