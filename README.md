@@ -3,6 +3,7 @@
 **A lightweight external memory module that gives frozen LLMs the ability to remember across sessions — no fine-tuning, no vector database, no retrieval infrastructure.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cnails/hebbian-trace-memory/blob/main/notebooks/demo.ipynb)
 
 ---
 

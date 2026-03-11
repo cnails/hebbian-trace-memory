@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hebbian-trace-memory"
+version = "0.1.0"
+description = "Persistent cross-session memory for frozen LLMs via Hebbian traces"
+requires-python = ">=3.9"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+demo = ["gradio>=4.0"]
+
+[tool.setuptools.packages.find]
+include = ["hebbian_trace*"]
