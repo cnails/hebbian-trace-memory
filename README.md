@@ -28,6 +28,11 @@ LLMs are stateless — every conversation starts from scratch. Hebbian Trace fix
 - **Resolves paraphrases.** Ask "What do people call you?" and get back the answer stored under "My name is John" (+83pp improvement).
 - **Chains multi-hop reasoning.** "Where does John live?" -> Paris -> "What country is Paris in?" -> France. Two trace lookups, zero new parameters.
 - **Filters noise.** Feed it a paragraph with 80% filler; dual semantic gates store only the meaningful facts (167x selectivity).
+- **Overrides built-in knowledge.** Write "The capital of France is Berlin" — the trace overrides GPT-2's 79% confidence in Paris with 96% confidence in Berlin. Frozen weights untouched.
+
+<p align="center">
+  <img src="figures/logit_battle.png" width="700" alt="Counterfactual override: trace injects Berlin over Paris, green over blue">
+</p>
 
 <p align="center">
   <img src="figures/retention_curve.png" width="700" alt="98% recall across 15 sessions with 24 fact types">
@@ -39,9 +44,13 @@ LLMs are stateless — every conversation starts from scratch. Hebbian Trace fix
 
 1. **Address by token identity.** The word "name" always maps to the same Q-vector, regardless of context. This is why cross-session retrieval works — and why kNN-LM (which uses contextual hidden states) fails (-63pp).
 
-2. **Store via outer product.** `T += Q_concept^T * V_entity`. One matrix multiply. 0.4ms.
+2. **Store via outer product.** One matrix multiply. 0.4ms:
 
-3. **Retrieve via matrix-vector product.** `V = Q_query * T`. Project through the LM's own embedding matrix. Inject as logit bias. The frozen model does the rest.
+$$T_v \leftarrow \lambda \, T_v \;+\; \eta \; Q_{\text{concept}}^\top \, V_{\text{entity}}$$
+
+3. **Retrieve via logit injection.** Project through the LM's own embedding matrix. The frozen model does the rest:
+
+$$\text{logits} \mathrel{+}= \alpha \left( Q_{\text{query}} \cdot T_v \right) W_e^\top$$
 
 4. **Scale via partitioning.** Hash the sparse Q pattern to route facts into separate banks. Each bank sees ~N/B facts. Interference drops. Capacity scales linearly. Cost: one argmax.
 
@@ -76,7 +85,7 @@ All seven mechanisms compose orthogonally — their effects are additive. See [A
 ## Quick Start
 
 ```bash
-git clone https://github.com/apustovit/hebbian-trace.git
+git clone https://github.com/cnails/hebbian-trace.git
 cd hebbian-trace
 pip install -r requirements.txt
 python demo.py
@@ -85,7 +94,7 @@ python demo.py
 First run downloads GPT-2 Small (~500MB). Subsequent runs use cached model.
 
 ```python
-from hebbian_trace.model import GPT2WithTrace
+from hebbian_trace.gpt2_trace import GPT2WithTrace
 
 # Create trace-augmented model
 model = GPT2WithTrace(
@@ -197,7 +206,7 @@ Real-world 2-hop retrieval **without oracle support**: bridge entities identifie
 | Batched | 10 | 88.2% | **98.8%** |
 | Batched | 15 | 62.7% | **98.7%** |
 
-*Auto bridge detection agrees with oracle on 94.6% of shared questions. 32 banks + best-bank scan (no oracle at read time) resolves first-token collisions: +36pp at batch 15.*
+*Auto bridge detection agrees with oracle on 94.6% of shared questions. **Hashed Trace Banks** are the key enabler: 32 banks + best-bank scan (no oracle tokens at read time) resolve first-token BPE collisions, recovering +36pp at batch 15 — the same mechanism that scales capacity to 1,000 facts at 99.4% on LLaMA-2 7B.*
 
 ### LAMA T-REx (2,034 Wikidata Facts)
 
