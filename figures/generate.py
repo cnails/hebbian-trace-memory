@@ -293,12 +293,12 @@ def generate_architecture_diagram():
                           facecolor='white', edgecolor=color,
                           alpha=0.7, linewidth=1))
 
-    # -- GPT-2 box (spanning bottom) --
-    gpt2_rect = plt.Rectangle((0.3, 0.2), 13.4, 0.9,
+    # -- LLM box (spanning bottom) --
+    llm_rect = plt.Rectangle((0.3, 0.2), 13.4, 0.9,
                                facecolor='#e2e8f0', edgecolor='#64748b',
                                linewidth=1.5, linestyle='--', zorder=1)
-    ax.add_patch(gpt2_rect)
-    ax.text(7.0, 0.65, 'Frozen GPT-2 Small (124M params) — provides wte embeddings and base logits',
+    ax.add_patch(llm_rect)
+    ax.text(7.0, 0.65, 'Frozen LLM (GPT-2 124M to LLaMA-2 7B) — provides token embeddings and base logits',
             ha='center', va='center', fontsize=10, color='#334155')
 
     # -- Dashed arrow from GPT-2 to Logit Injection --
@@ -415,74 +415,81 @@ def generate_rag_comparison():
 
 
 def generate_capacity_curve():
-    """Capacity stress test: accuracy vs number of stored facts.
+    """Capacity scaling: GPT-2 (up to 100) and LLaMA-2 7B (up to 1000).
 
-    Three curves: without PS, with PS, with PS + 16 hashed banks.
+    Two panels: (A) GPT-2 Small with banks, (B) LLaMA-2 7B exp30 results.
     """
 
-    fig, ax = plt.subplots(figsize=(10, 5.5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
 
-    # Without pattern separation
-    ns_no = [1, 3, 5, 7, 10, 15, 20, 24, 30, 40, 50, 60, 75, 100]
-    acc_no = [0.950, 0.967, 0.960, 0.964, 0.960, 0.877, 0.792, 0.704,
-              0.478, 0.362, 0.252, 0.180, 0.117, 0.070]
-    ci_lo_no = [0.900, 0.933, 0.930, 0.936, 0.930, 0.843, 0.755, 0.663,
-                0.432, 0.326, 0.220, 0.153, 0.095, 0.056]
-    ci_hi_no = [1.00, 1.00, 0.990, 0.986, 0.985, 0.910, 0.828, 0.742,
-                0.522, 0.399, 0.284, 0.208, 0.140, 0.085]
-
-    # With pattern separation (8x, k=16)
+    # -- Panel A: GPT-2 Small (exp28 results) --
+    # With pattern separation (8x, k=16), no banks
     ns_ps = [1, 3, 5, 7, 10, 15, 20, 24, 30, 40, 50, 60, 75, 100]
     acc_ps = [1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 0.992, 0.981,
               0.960, 0.878, 0.784, 0.701, 0.536, 0.366]
-    ci_lo_ps = [1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 0.985, 0.967,
-                0.943, 0.859, 0.765, 0.678, 0.507, 0.344]
-    ci_hi_ps = [1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00, 0.994,
-                0.977, 0.896, 0.803, 0.723, 0.565, 0.386]
 
-    # With PS + 16 hashed trace banks (exp28 results)
-    ns_banks = [10, 20, 30, 50, 75, 100]
-    acc_banks = [0.993, 0.995, 0.992, 0.994, 0.992, 0.992]
-    ci_lo_banks = [0.98, 0.985, 0.98, 0.985, 0.98, 0.98]
-    ci_hi_banks = [1.00, 1.00, 1.00, 1.00, 1.00, 1.00]
+    # With PS + 16 hashed trace banks (exp28)
+    ns_banks_gpt2 = [10, 20, 30, 50, 75, 100]
+    acc_banks_gpt2 = [0.993, 0.995, 0.992, 0.994, 0.992, 0.992]
 
-    ax.plot(ns_no, acc_no, 's--', color='#9ca3af', linewidth=1.5,
-            markersize=6, label='Without pattern separation', zorder=1)
-    ax.fill_between(ns_no, ci_lo_no, ci_hi_no, alpha=0.08, color='#9ca3af')
+    ax1.plot(ns_ps, acc_ps, 'o--', color='#f59e0b', linewidth=2,
+             markersize=6, label='PS only (no banks)', zorder=2)
+    ax1.plot(ns_banks_gpt2, acc_banks_gpt2, 'D-', color='#2563eb',
+             linewidth=2.5, markersize=9, label='PS + 16 banks', zorder=3)
 
-    ax.plot(ns_ps, acc_ps, 'o--', color='#f59e0b', linewidth=2,
-            markersize=7, label='With pattern separation (8x, k=16)', zorder=2)
-    ax.fill_between(ns_ps, ci_lo_ps, ci_hi_ps, alpha=0.12, color='#f59e0b')
+    ax1.axhline(y=0.004, color='#e5e7eb', linestyle=':', linewidth=1)
 
-    ax.plot(ns_banks, acc_banks, 'D-', color='#2563eb', linewidth=2.5,
-            markersize=9, label='PS + 16 hashed trace banks', zorder=3)
-    ax.fill_between(ns_banks, ci_lo_banks, ci_hi_banks, alpha=0.15,
-                    color='#2563eb')
+    ax1.set_xlabel('Number of Facts', fontsize=12)
+    ax1.set_ylabel('Cross-Context Accuracy', fontsize=12)
+    ax1.set_title('(A) GPT-2 Small (124M)\n16 banks: 99.2% at 100 facts',
+                  fontsize=12, fontweight='bold')
+    ax1.set_ylim(-0.02, 1.08)
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    ax1.legend(loc='center right', fontsize=10)
+    ax1.grid(True, alpha=0.3)
 
-    # Random baseline (1/229 entities)
-    ax.axhline(y=0.004, color='#e5e7eb', linestyle=':',
-               linewidth=1, label='Random (0.4%)')
+    ax1.annotate('99.2%', xy=(100, 0.992), xytext=(75, 0.85),
+                 fontsize=11, fontweight='bold', color='#2563eb',
+                 arrowprops=dict(arrowstyle='->', color='#2563eb', lw=1.5))
+    ax1.annotate('35.6%', xy=(100, 0.366), xytext=(75, 0.50),
+                 fontsize=10, color='#f59e0b',
+                 arrowprops=dict(arrowstyle='->', color='#f59e0b', lw=1.2))
 
-    ax.set_xlabel('Number of Facts Stored', fontsize=13)
-    ax.set_ylabel('Cross-Context Retrieval Accuracy', fontsize=13)
-    ax.set_title('Capacity Scaling: Hashed Trace Banks Maintain 99%+ Through 100 Facts',
-                 fontsize=14, fontweight='bold')
-    ax.set_ylim(-0.02, 1.08)
-    ax.yaxis.set_major_formatter(
-        plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
-    ax.legend(loc='center right', fontsize=10)
-    ax.grid(True, alpha=0.3)
+    # -- Panel B: LLaMA-2 7B (exp30 results, 50 episodes) --
+    ns_7b = [10, 20, 50, 100, 200, 300, 500, 750, 1000]
+    baseline_7b = [0.996, 0.995, 0.953, 0.761, 0.455, 0.314, 0.189, 0.133, 0.098]
+    banks_16 =    [0.998, 1.000, 0.997, 0.997, 0.995, 0.990, 0.965, 0.921, 0.866]
+    banks_64 =    [0.998, 1.000, 0.998, 0.998, 0.998, 0.998, 0.996, 0.992, 0.985]
+    banks_128 =   [0.998, 1.000, 0.998, 0.999, 0.998, 0.998, 0.997, 0.996, 0.994]
 
-    # Key annotation
-    ax.annotate('99.2% at n=100\n(16 banks)',
-                xy=(100, 0.992), xytext=(75, 0.85),
-                fontsize=11, fontweight='bold', color='#2563eb',
-                arrowprops=dict(arrowstyle='->', color='#2563eb', lw=1.5))
+    ax2.plot(ns_7b, baseline_7b, 's--', color='#9ca3af', linewidth=1.5,
+             markersize=6, label='No banks (baseline)', zorder=1)
+    ax2.plot(ns_7b, banks_16, 'o-', color='#f59e0b', linewidth=2,
+             markersize=7, label='16 banks', zorder=2)
+    ax2.plot(ns_7b, banks_64, 'D-', color='#059669', linewidth=2,
+             markersize=8, label='64 banks', zorder=3)
+    ax2.plot(ns_7b, banks_128, 'P-', color='#2563eb', linewidth=2.5,
+             markersize=9, label='128 banks', zorder=4)
 
-    ax.annotate('35.6% at n=100\n(no banks)',
-                xy=(100, 0.366), xytext=(75, 0.50),
-                fontsize=10, color='#f59e0b',
-                arrowprops=dict(arrowstyle='->', color='#f59e0b', lw=1.2))
+    ax2.axhline(y=1/111, color='#e5e7eb', linestyle=':', linewidth=1)
+
+    ax2.set_xlabel('Number of Facts', fontsize=12)
+    ax2.set_title('(B) LLaMA-2 7B (32 heads)\n128 banks: 99.4% at 1000 facts',
+                  fontsize=12, fontweight='bold')
+    ax2.set_ylim(-0.02, 1.08)
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
+    ax2.legend(loc='center right', fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    ax2.annotate('99.4%', xy=(1000, 0.994), xytext=(700, 0.85),
+                 fontsize=11, fontweight='bold', color='#2563eb',
+                 arrowprops=dict(arrowstyle='->', color='#2563eb', lw=1.5))
+    ax2.annotate('9.8%', xy=(1000, 0.098), xytext=(700, 0.25),
+                 fontsize=10, color='#9ca3af',
+                 arrowprops=dict(arrowstyle='->', color='#9ca3af', lw=1.2))
+
+    fig.suptitle('Capacity Scaling: Hashed Trace Banks from 100 to 1000 Facts',
+                 fontsize=14, fontweight='bold', y=1.02)
 
     plt.tight_layout()
     path = os.path.join(FIGURES_DIR, 'capacity_curve.png')
@@ -492,91 +499,109 @@ def generate_capacity_curve():
 
 
 def generate_model_scaling():
-    """Three-model scaling: GPT-2 Small vs Medium vs Phi-2.
+    """Five-model scaling: GPT-2 Small/Medium, Phi-2, LLaMA-2 7B, Mistral 7B.
 
-    Results from 50-episode evaluations (seed=42).
+    Results from 100-episode evaluations (seed=42).
     All models: PS 8x_k16, trace_lr=1.0, decay=0.99.
-    Alpha auto-tuned: Small=0.5, Medium=1.0, Phi-2=50.0.
+    Alpha auto-tuned per model. LLaMA-2 uses 32 trace heads.
     """
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
 
-    n_facts = [1, 3, 5, 7]
+    n_facts = [1, 3, 5]
 
-    # -- Panel A: Three-model comparison (with PS) --
-    small_cross = [1.000, 0.927, 0.836, 0.829]
-    medium_cross = [1.000, 0.967, 0.872, 0.869]
-    phi2_cross = [1.000, 0.993, 0.984, 0.929]
-    baseline = [0.060, 0.053, 0.048, 0.080]
+    # -- Panel A: Five-model comparison (with PS, best config) --
+    # 100-episode results from memory/experiments.md scaling tables
+    small_cross =   [1.000, 0.897, 0.854]
+    medium_cross =  [1.000, 0.727, 0.704]
+    phi2_cross =    [1.000, 0.993, 0.984]
+    llama2_cross =  [1.000, 0.940, 0.856]  # 32 heads, alpha=20
+    mistral_cross = [0.960, 0.733, 0.676]  # 32 heads, alpha=1000
+    baseline =      [0.060, 0.053, 0.048]
 
     ax1.plot(n_facts, phi2_cross, 'D-', color='#059669', linewidth=2.5,
-             markersize=9, label='Phi-2 (2.7B)', zorder=4)
-    ax1.plot(n_facts, medium_cross, 'o-', color='#2563eb', linewidth=2.5,
-             markersize=8, label='GPT-2 Medium (355M)', zorder=3)
-    ax1.plot(n_facts, small_cross, 's-', color='#f59e0b', linewidth=2.5,
-             markersize=8, label='GPT-2 Small (124M)', zorder=2)
+             markersize=9, label='Phi-2 (2.7B)', zorder=5)
+    ax1.plot(n_facts, llama2_cross, 'P-', color='#dc2626', linewidth=2.5,
+             markersize=10, label='LLaMA-2 7B (32h)', zorder=4)
+    ax1.plot(n_facts, small_cross, 's-', color='#f59e0b', linewidth=2,
+             markersize=8, label='GPT-2 Small (124M)', zorder=3)
+    ax1.plot(n_facts, medium_cross, 'o-', color='#2563eb', linewidth=2,
+             markersize=8, label='GPT-2 Medium (355M)', zorder=2)
+    ax1.plot(n_facts, mistral_cross, 'v--', color='#7c3aed', linewidth=2,
+             markersize=8, label='Mistral 7B (outlier)', zorder=2)
     ax1.plot(n_facts, baseline, '^--', color='#9ca3af', linewidth=1.5,
              markersize=6, label='No trace (random)', zorder=1)
 
-    ax1.fill_between(n_facts, small_cross, phi2_cross,
-                     alpha=0.08, color='#059669')
-
-    # Delta annotations (Phi-2 vs Small)
-    for i, n in enumerate(n_facts):
-        delta = phi2_cross[i] - small_cross[i]
-        if delta > 0.005:
-            ax1.annotate(f'+{delta:.1%}',
-                         xy=(n, phi2_cross[i]),
-                         xytext=(n + 0.25, phi2_cross[i] + 0.02),
-                         fontsize=9, color='#059669', fontweight='bold')
+    ax1.fill_between(n_facts, medium_cross, phi2_cross,
+                     alpha=0.06, color='#059669')
 
     ax1.set_xlabel('Number of Facts', fontsize=12)
     ax1.set_ylabel('Cross-Context Accuracy', fontsize=12)
-    ax1.set_title('(A) Three-Model Scaling\n(PS 8x_k16, question-only input)',
+    ax1.set_title('(A) Five-Model Scaling\n(PS 8x_k16, best config per model)',
                   fontsize=12, fontweight='bold')
     ax1.set_xticks(n_facts)
     ax1.set_ylim(-0.02, 1.12)
     ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
-    ax1.legend(loc='lower left', fontsize=10)
+    ax1.legend(loc='lower left', fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    # -- Panel B: Pattern separation effect across all three --
-    small_no_ps = [1.000, 0.830, 0.736, 0.714]
-    small_ps = [1.000, 0.927, 0.836, 0.829]
-    medium_no_ps = [1.000, 0.853, 0.740, 0.694]
-    medium_ps = [1.000, 0.967, 0.872, 0.869]
-    phi2_no_ps = [1.000, 0.960, 0.920, 0.860]
-    phi2_ps = [1.000, 0.993, 0.984, 0.929]
+    # -- Panel B: Head-scaling effect on 7B models --
+    models = ['GPT-2\nSmall', 'GPT-2\nMedium', 'Phi-2', 'LLaMA-2\n7B', 'Mistral\n7B']
+    acc_8h =  [0.854, 0.704, 0.984, 0.698, 0.674]   # 8 heads at n=5
+    acc_32h = [None,  None,  None,  0.856, 0.676]     # 32 heads at n=5
 
-    x = np.arange(len(n_facts))
-    width = 0.14
+    x = np.arange(len(models))
+    width = 0.35
 
-    ax2.bar(x - 2.5*width, small_no_ps, width, label='Small (124M)',
-            color='#fcd34d', edgecolor='white', linewidth=1)
-    ax2.bar(x - 1.5*width, small_ps, width, label='Small + PS',
-            color='#f59e0b', edgecolor='white', linewidth=1)
-    ax2.bar(x - 0.5*width, medium_no_ps, width, label='Medium (355M)',
-            color='#93c5fd', edgecolor='white', linewidth=1)
-    ax2.bar(x + 0.5*width, medium_ps, width, label='Medium + PS',
-            color='#2563eb', edgecolor='white', linewidth=1)
-    ax2.bar(x + 1.5*width, phi2_no_ps, width, label='Phi-2 (2.7B)',
-            color='#6ee7b7', edgecolor='white', linewidth=1)
-    ax2.bar(x + 2.5*width, phi2_ps, width, label='Phi-2 + PS',
-            color='#059669', edgecolor='white', linewidth=1)
+    bars1 = ax2.bar(x - width/2, acc_8h, width, label='8 trace heads',
+                    color='#93c5fd', edgecolor='white', linewidth=1.5)
+    # Only plot 32h bars for 7B models
+    acc_32h_plot = [0, 0, 0, 0.856, 0.676]
+    bars2 = ax2.bar(x[-2:] + width/2,
+                    [0.856, 0.676], width, label='32 trace heads',
+                    color='#2563eb', edgecolor='white', linewidth=1.5)
 
-    ax2.set_xlabel('Number of Facts', fontsize=12)
-    ax2.set_ylabel('Cross-Context Accuracy', fontsize=12)
-    ax2.set_title('(B) Pattern Separation Effect\n(consistent across all three models)',
+    # Value labels on 8h bars
+    for bar, acc in zip(bars1, acc_8h):
+        if acc is not None:
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.015,
+                     f'{acc:.1%}', ha='center', va='bottom', fontsize=9,
+                     fontweight='bold', color='#475569')
+
+    # Value labels on 32h bars
+    for bar, acc in zip(bars2, [0.856, 0.676]):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.015,
+                 f'{acc:.1%}', ha='center', va='bottom', fontsize=9,
+                 fontweight='bold', color='#1e40af')
+
+    # Delta annotation for LLaMA-2
+    ax2.annotate('+15.8pp',
+                 xy=(3, 0.55), fontsize=10,
+                 color='#059669', fontweight='bold',
+                 ha='center', va='center',
+                 bbox=dict(boxstyle='round,pad=0.2',
+                           facecolor='#ecfdf5', edgecolor='#059669',
+                           alpha=0.9))
+
+    # Mistral annotation
+    ax2.annotate('+0pp\n(outlier)',
+                 xy=(4, 0.48), fontsize=9,
+                 color='#dc2626', fontweight='bold',
+                 ha='center', va='center')
+
+    ax2.set_xlabel('Model', fontsize=12)
+    ax2.set_ylabel('Cross-Context Accuracy (n=5)', fontsize=12)
+    ax2.set_title('(B) Head-Scaling Effect at 7B\n(32 heads recovers LLaMA-2, not Mistral)',
                   fontsize=12, fontweight='bold')
     ax2.set_xticks(x)
-    ax2.set_xticklabels([str(n) for n in n_facts])
+    ax2.set_xticklabels(models, fontsize=9)
     ax2.set_ylim(0, 1.12)
     ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0%}'))
-    ax2.legend(loc='lower left', fontsize=8, ncol=3)
+    ax2.legend(loc='upper right', fontsize=10)
     ax2.grid(True, axis='y', alpha=0.3)
     ax2.set_axisbelow(True)
 
-    fig.suptitle('Model Scaling: Trace Generalizes from 124M to 2.7B Parameters',
+    fig.suptitle('Model Scaling: Trace Generalizes from 124M to 7B Parameters',
                  fontsize=14, fontweight='bold', y=1.02)
 
     plt.tight_layout()
@@ -587,50 +612,95 @@ def generate_model_scaling():
 
 
 def generate_multihop_capacity():
-    """Multi-hop chain capacity: end-to-end accuracy vs number of chains.
+    """Multi-hop: (A) synthetic capacity (exp26), (B) HotpotQA batched (exp27).
 
-    Multi-hop results (50 episodes, PS 8x_k16, seed=42).
-    Shows hop-1, hop-2|oracle, and end-to-end accuracy as N chains increases.
+    Exp26: 11 chains + N extra standard facts, 100 episodes.
+    Exp27: 841 real HotpotQA bridge questions, batch sizes 1-15, 50 batches.
+    Non-oracle bridge detection + best-bank scan (no oracle at read time).
     """
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
 
-    # N chains stored simultaneously (person->city + N city->country links)
-    n_chains = [1, 3, 5, 8, 11]
-    hop1 = [100.0, 100.0, 100.0, 100.0, 100.0]
-    hop2_oracle = [100.0, 100.0, 100.0, 100.0, 98.0]
-    end_to_end = [100.0, 100.0, 100.0, 98.0, 96.0]
-    # With 3 extra standard facts for interference
-    e2e_with_extra = [100.0, 100.0, 100.0, 96.0, 92.0]
+    # -- Panel A: Synthetic capacity (exp26 Phase 3+4, 11 chains + N extra) --
+    total_facts_clean = [12, 17, 22, 32, 34]
+    hop1_clean =        [100, 100, 100, 89, 89]
+    hop2_clean =        [100, 100, 89,  85, 82]
+    e2e_clean =         [100, 100, 89,  74, 74]
 
-    ax.plot(n_chains, hop1, 'o-', color='#2563eb', linewidth=2.5,
-            markersize=9, label='Hop-1 (get city)', zorder=3)
-    ax.plot(n_chains, hop2_oracle, 's-', color='#059669', linewidth=2,
-            markersize=8, label='Hop-2|oracle (given correct city)', zorder=2)
-    ax.plot(n_chains, end_to_end, 'D-', color='#7c3aed', linewidth=2.5,
-            markersize=9, label='End-to-end (0 extra facts)', zorder=3)
-    ax.plot(n_chains, e2e_with_extra, '^--', color='#d97706', linewidth=2,
-            markersize=8, label='End-to-end (3 extra facts)', zorder=2)
+    ax1.plot(total_facts_clean, hop1_clean, 'o-', color='#2563eb',
+             linewidth=2.5, markersize=9, label='Hop-1 (standard)', zorder=3)
+    ax1.plot(total_facts_clean, hop2_clean, 's-', color='#059669',
+             linewidth=2, markersize=8, label='Hop-2|oracle (chain)', zorder=2)
+    ax1.plot(total_facts_clean, e2e_clean, 'D-', color='#7c3aed',
+             linewidth=2.5, markersize=9, label='End-to-end', zorder=4)
 
-    ax.fill_between(n_chains, e2e_with_extra, end_to_end,
-                    alpha=0.1, color='#d97706')
+    ax1.fill_between(total_facts_clean, e2e_clean, hop1_clean,
+                     alpha=0.08, color='#7c3aed')
 
-    ax.set_xlabel('Number of Chain Links Stored', fontsize=13)
-    ax.set_ylabel('Accuracy (%)', fontsize=13)
-    ax.set_title('Multi-Hop Chain Capacity: Two-Hop Reasoning via Trace',
-                 fontsize=14, fontweight='bold')
-    ax.set_xticks(n_chains)
-    ax.set_ylim(85, 103)
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
-    ax.legend(loc='lower left', fontsize=10)
-    ax.grid(True, alpha=0.3)
+    ax1.set_xlabel('Total Facts in Trace', fontsize=12)
+    ax1.set_ylabel('Accuracy (%)', fontsize=12)
+    ax1.set_title('(A) Synthetic Multi-Hop Capacity\n(11 chains + extra facts, 100 episodes)',
+                  fontsize=12, fontweight='bold')
+    ax1.set_ylim(60, 105)
+    ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
+    ax1.legend(loc='lower left', fontsize=10)
+    ax1.grid(True, alpha=0.3)
 
-    # Annotation
-    ax.annotate('100% end-to-end\nat N=5 chains',
-                xy=(5, 100), xytext=(2.2, 93),
-                fontsize=10, fontweight='bold', color='#7c3aed',
-                arrowprops=dict(arrowstyle='->', color='#7c3aed', lw=1.5),
-                va='center')
+    ax1.annotate('100% through\n17 total facts',
+                 xy=(17, 100), xytext=(22, 96),
+                 fontsize=10, fontweight='bold', color='#7c3aed',
+                 arrowprops=dict(arrowstyle='->', color='#7c3aed', lw=1.5))
+
+    # -- Panel B: HotpotQA batched (exp27, non-oracle + banks) --
+    # Auto bridge detection, 4,159 questions, 50 batches
+    batch_size = [1, 3, 5, 8, 10, 15]
+
+    # No banks (auto bridge detection)
+    e2e_no_banks =  [100, 100,  98.0, 94.5, 88.2, 62.7]
+    # 32 banks + best-bank scan (auto bridge detection)
+    e2e_banks_32 =  [100, 99.3, 100,  99.5, 98.8, 98.7]
+
+    ax2.plot(batch_size, e2e_no_banks, 's--', color='#9ca3af',
+             linewidth=2, markersize=7, label='No banks', zorder=2)
+    ax2.plot(batch_size, e2e_banks_32, 'D-', color='#2563eb',
+             linewidth=2.5, markersize=9,
+             label='32 banks + best-bank scan', zorder=4)
+
+    ax2.fill_between(batch_size, e2e_no_banks, e2e_banks_32,
+                     alpha=0.1, color='#2563eb')
+
+    # Per-question result annotation
+    ax2.annotate('100% per-question\n(4,159 questions)',
+                 xy=(1, 100), xytext=(4, 80),
+                 fontsize=10, fontweight='bold', color='#059669',
+                 arrowprops=dict(arrowstyle='->', color='#059669', lw=1.5))
+
+    # Banks improvement annotation
+    ax2.annotate('98.7% vs 62.7%\n(+36pp)',
+                 xy=(15, 98.7), xytext=(11.5, 91),
+                 fontsize=10, fontweight='bold', color='#2563eb',
+                 arrowprops=dict(arrowstyle='->', color='#2563eb', lw=1.5))
+
+    ax2.annotate('No oracle needed',
+                 xy=(10, 98.8), xytext=(6, 88),
+                 fontsize=9, color='#059669', style='italic',
+                 bbox=dict(boxstyle='round,pad=0.3',
+                           facecolor='#ecfdf5', edgecolor='#059669',
+                           alpha=0.9))
+
+    ax2.set_xlabel('Batch Size (questions sharing trace)', fontsize=12)
+    ax2.set_ylabel('End-to-End Accuracy (%)', fontsize=12)
+    ax2.set_title('(B) HotpotQA 2-Hop (4,159 Questions, Non-Oracle)\n'
+                  'Best-bank scan: 98.7% at batch=15',
+                  fontsize=12, fontweight='bold')
+    ax2.set_xticks(batch_size)
+    ax2.set_ylim(55, 105)
+    ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f'{y:.0f}%'))
+    ax2.legend(loc='lower left', fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle('Multi-Hop Reasoning: Synthetic Chains and Real HotpotQA Questions',
+                 fontsize=14, fontweight='bold', y=1.02)
 
     plt.tight_layout()
     path = os.path.join(FIGURES_DIR, 'multihop_capacity.png')

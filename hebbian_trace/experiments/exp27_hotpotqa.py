@@ -51,25 +51,34 @@ class HotpotQuestion:
 def load_hotpot_questions(
     tokenizer: GPT2Tokenizer,
     max_questions: int = 0,
+    oracle: bool = True,
 ) -> list[HotpotQuestion]:
     """Load and filter HotpotQA bridge questions.
+
+    Args:
+        oracle: If True, use supporting_facts annotations (oracle).
+                If False, identify bridge from context paragraphs only.
 
     Filters:
     1. Bridge type only (not comparison)
     2. Single-token BPE answer
-    3. Bridge entity identifiable from annotations
+    3. Bridge entity identifiable
     4. Non-degenerate (bridge != answer)
     """
     from datasets import load_dataset
 
-    print("Loading HotpotQA validation set...")
+    mode = "oracle" if oracle else "auto"
+    print(f"Loading HotpotQA validation set ({mode} bridge detection)...")
     ds = load_dataset('hotpot_qa', 'distractor', split='validation')
 
     questions = []
+    n_bridge = 0
+    n_no_bridge = 0
 
     for ex in ds:
         if ex['type'] != 'bridge':
             continue
+        n_bridge += 1
 
         answer = ex['answer']
         if answer.lower() in ('yes', 'no'):
@@ -81,8 +90,12 @@ def load_hotpot_questions(
             continue
 
         # Identify bridge entity
-        bridge_entity, subject = _find_bridge_entity(ex)
+        if oracle:
+            bridge_entity, subject = _find_bridge_entity(ex)
+        else:
+            bridge_entity, subject = _find_bridge_entity_auto(ex)
         if bridge_entity is None:
+            n_no_bridge += 1
             continue
 
         # Filter degenerate
@@ -93,7 +106,7 @@ def load_hotpot_questions(
         bridge_toks = tokenizer.encode(
             ' ' + bridge_entity, add_special_tokens=False)
 
-        # Get supporting fact text
+        # Get supporting fact text (from annotations, for diagnostics)
         sf_bridge = _get_sf_sentences(ex, bridge_entity)
         sf_subject = _get_sf_sentences(ex, subject)
 
@@ -113,11 +126,14 @@ def load_hotpot_questions(
         if max_questions > 0 and len(questions) >= max_questions:
             break
 
+    print(f"  Bridge questions scanned: {n_bridge}")
+    print(f"  Bridge not found: {n_no_bridge}")
+
     return questions
 
 
 def _find_bridge_entity(ex) -> tuple:
-    """Identify bridge entity from supporting facts.
+    """Identify bridge entity from supporting facts (oracle).
 
     Bridge entity: SF title whose paragraph contains the answer,
     and is mentioned in the other SF paragraph.
@@ -147,6 +163,63 @@ def _find_bridge_entity(ex) -> tuple:
         return t2, t1
     elif a_in_t1 and not a_in_t2:
         return t1, t2
+
+    return None, None
+
+
+def _find_bridge_entity_auto(ex) -> tuple:
+    """Identify bridge entity WITHOUT supporting facts (non-oracle).
+
+    Uses only the 10 context paragraphs + answer text.
+    Heuristic: find two paragraphs (A, B) where title A appears in
+    paragraph B's text AND paragraph A contains the answer.
+    Then A = bridge, B = subject.
+    """
+    titles = ex['context']['title']
+    paragraphs = ex['context']['sentences']
+    answer = ex['answer']
+
+    # Build text for each paragraph
+    texts = [' '.join(sents) for sents in paragraphs]
+
+    # Strategy 1: title-in-paragraph + answer-in-paragraph
+    # For each pair (A, B): if title_A in text_B AND answer in text_A
+    #   → A is bridge (contains answer), B is subject (mentions bridge)
+    candidates = []
+    for i in range(len(titles)):
+        # Does paragraph i contain the answer?
+        if answer.lower() not in texts[i].lower():
+            continue
+        for j in range(len(titles)):
+            if i == j:
+                continue
+            # Is title i mentioned in paragraph j?
+            if titles[i].lower() in texts[j].lower():
+                candidates.append((titles[i], titles[j]))
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Multiple candidates — prefer one where subject title appears
+    # in the question
+    if len(candidates) > 1:
+        question_lower = ex['question'].lower()
+        for bridge, subject in candidates:
+            if subject.lower() in question_lower:
+                return bridge, subject
+        # Still ambiguous — return first
+        return candidates[0]
+
+    # Strategy 2: reverse — title_B in text_A AND answer in text_A
+    # (bridge paragraph both contains answer AND mentions subject)
+    for i in range(len(titles)):
+        if answer.lower() not in texts[i].lower():
+            continue
+        for j in range(len(titles)):
+            if i == j:
+                continue
+            if titles[j].lower() in texts[i].lower():
+                return titles[i], titles[j]
 
     return None, None
 
@@ -533,29 +606,22 @@ def run_phase3_diagnostic(
 
 # ── Main ─────────────────────────────────────────────────────────────
 
-def run_experiment(
-    n_questions: int = 100,
-    phase: str = "all",
-    batch_size: int = 5,
-    n_banks: int = 0,
-    quick: bool = False,
-):
-    """Run HotpotQA multi-hop experiment."""
-    if quick:
-        n_questions = min(n_questions, 50)
+def _run_single(
+    model: GPT2WithTrace,
+    tokenizer: GPT2Tokenizer,
+    questions: list[HotpotQuestion],
+    phase: str,
+    batch_size: int,
+    use_banks: bool,
+    label: str = "",
+) -> dict:
+    """Run evaluation phases on a set of questions."""
+    if label:
+        print(f"\n{'#'*60}")
+        print(f"# {label}")
+        print(f"{'#'*60}")
 
-    model, tokenizer = setup_model(alpha=0.5, use_ps=True)
-
-    use_banks = n_banks > 0
-    if use_banks:
-        model.set_bank_mode(n_banks)
-        print(f"Bank mode enabled: {n_banks} banks")
-
-    questions = load_hotpot_questions(
-        tokenizer, max_questions=n_questions)
-
-    print(f"\nHotpotQA 2-hop evaluation")
-    print(f"  Questions loaded: {len(questions)}")
+    print(f"  Questions: {len(questions)}")
     print(f"  Bridge 1-tok: "
           f"{sum(1 for q in questions if q.bridge_n_tokens == 1)}")
     print(f"  Bridge 2-tok: "
@@ -579,9 +645,264 @@ def run_experiment(
         results["phase3"] = run_phase3_diagnostic(
             model, tokenizer, questions)
 
+    return results
+
+
+def run_batch_sweep(
+    model: GPT2WithTrace,
+    tokenizer,
+    questions: list[HotpotQuestion],
+    batch_sizes: list[int],
+    n_batches: int = 50,
+    bank_configs: list[int] = None,
+) -> dict:
+    """Sweep batch sizes with multiple bank configurations.
+
+    Args:
+        bank_configs: List of bank counts to compare (e.g., [0, 32, 64]).
+                      0 = no banks.
+    """
+    if bank_configs is None:
+        bank_configs = [0]
+
+    print(f"\n{'='*60}")
+    print(f"Batch Sweep: sizes={batch_sizes}, banks={bank_configs}, "
+          f"n_batches={n_batches}")
+    print(f"{'='*60}")
+
+    results = {}
+
+    for n_banks in bank_configs:
+        use_banks = n_banks > 0
+        if use_banks:
+            model.set_bank_mode(n_banks)
+        else:
+            model.set_bank_mode(1)
+
+        bank_label = f"banks={n_banks}" if use_banks else "no_banks"
+        results[n_banks] = {}
+
+        for bs in batch_sizes:
+            r = run_phase2_batched(
+                model, tokenizer, questions,
+                batch_size=bs, n_batches=n_batches,
+                use_banks=use_banks)
+            results[n_banks][bs] = r
+
+    # Reset
+    model.set_bank_mode(1)
+
+    # Summary table
+    print(f"\n{'='*60}")
+    print(f"BATCH SWEEP SUMMARY")
+    print(f"{'='*60}")
+
+    header = f"  {'Batch':>5}  {'Facts':>5}"
+    for nb in bank_configs:
+        label = f"banks={nb}" if nb > 0 else "no_banks"
+        header += f"  {label:>12}"
+    print(header)
+    print(f"  {'-' * (len(header) - 2)}")
+
+    for bs in batch_sizes:
+        line = f"  {bs:>5}  {bs*2:>5}"
+        for nb in bank_configs:
+            r = results[nb][bs]
+            line += f"  {r['end_to_end']:>11.1f}%"
+        print(line)
+
+    return results
+
+
+def run_experiment(
+    n_questions: int = 100,
+    phase: str = "all",
+    batch_size: int = 5,
+    n_banks: int = 0,
+    quick: bool = False,
+    oracle: bool = True,
+    compare: bool = False,
+    batch_sweep: bool = False,
+    bank_configs: list[int] = None,
+):
+    """Run HotpotQA multi-hop experiment.
+
+    Args:
+        oracle: Use oracle supporting facts (True) or auto detection (False).
+        compare: Run both oracle and auto, compare results.
+        batch_sweep: Sweep batch sizes [1,3,5,8,10,15] with bank_configs.
+        bank_configs: Bank counts for sweep (default: [0, 32]).
+    """
+    if quick:
+        n_questions = min(n_questions, 50)
+
+    model, tokenizer = setup_model(alpha=0.5, use_ps=True)
+
+    use_banks = n_banks > 0
+    if use_banks:
+        model.set_bank_mode(n_banks)
+        print(f"Bank mode enabled: {n_banks} banks")
+
+    print(f"\nHotpotQA 2-hop evaluation")
+
+    if batch_sweep:
+        # Batch sweep mode
+        if bank_configs is None:
+            bank_configs = [0, 32]
+        batch_sizes = [1, 3, 5, 8, 10, 15]
+        if quick:
+            batch_sizes = [1, 5, 10]
+
+        questions = load_hotpot_questions(
+            tokenizer, max_questions=n_questions, oracle=oracle)
+        mode = "oracle" if oracle else "auto"
+        print(f"  Mode: {mode}")
+        print(f"  Questions: {len(questions)}")
+
+        # Per-question baseline (banks don't matter here, 2 facts only)
+        for nb in bank_configs:
+            if nb > 0:
+                model.set_bank_mode(nb)
+            else:
+                model.set_bank_mode(1)
+            p1 = run_phase1_per_question(
+                model, tokenizer, questions, use_banks=(nb > 0))
+            print(f"  Per-question (banks={nb}): e2e={p1['end_to_end']:.1f}%")
+
+        n_batches = 50 if not quick else 20
+        results = run_batch_sweep(
+            model, tokenizer, questions,
+            batch_sizes=batch_sizes,
+            n_batches=n_batches,
+            bank_configs=bank_configs)
+
+        model.set_bank_mode(1)
+        return results
+
+    if compare:
+        # Load both oracle and auto, compare on shared questions
+        q_oracle = load_hotpot_questions(
+            tokenizer, max_questions=n_questions, oracle=True)
+        q_auto = load_hotpot_questions(
+            tokenizer, max_questions=n_questions, oracle=False)
+
+        # Find matching questions (same question text)
+        oracle_by_q = {q.question: q for q in q_oracle}
+        auto_by_q = {q.question: q for q in q_auto}
+        shared_keys = set(oracle_by_q) & set(auto_by_q)
+
+        # Check bridge agreement
+        agree = 0
+        disagree = 0
+        disagree_examples = []
+        for qtext in sorted(shared_keys):
+            qo = oracle_by_q[qtext]
+            qa = auto_by_q[qtext]
+            if qo.bridge_entity == qa.bridge_entity:
+                agree += 1
+            else:
+                disagree += 1
+                if len(disagree_examples) < 5:
+                    disagree_examples.append(
+                        (qtext[:60], qo.bridge_entity, qa.bridge_entity))
+
+        print(f"\n  Oracle questions: {len(q_oracle)}")
+        print(f"  Auto questions:   {len(q_auto)}")
+        print(f"  Shared questions: {len(shared_keys)}")
+        print(f"  Bridge agreement: {agree}/{len(shared_keys)} "
+              f"({agree/max(len(shared_keys),1)*100:.1f}%)")
+        print(f"  Bridge disagree:  {disagree}")
+        if disagree_examples:
+            print(f"\n  Disagreements (first 5):")
+            for qt, bo, ba in disagree_examples:
+                print(f"    Q: {qt}")
+                print(f"      oracle: {bo}  auto: {ba}")
+
+        # Auto-only questions (found by auto but not oracle)
+        auto_only = set(auto_by_q) - set(oracle_by_q)
+        oracle_only = set(oracle_by_q) - set(auto_by_q)
+        print(f"\n  Auto-only (not found by oracle): {len(auto_only)}")
+        print(f"  Oracle-only (not found by auto): {len(oracle_only)}")
+
+        # Run evaluation on both sets
+        if batch_sweep:
+            if bank_configs is None:
+                bank_configs = [0, 32]
+            batch_sizes = [1, 3, 5, 8, 10, 15]
+            if quick:
+                batch_sizes = [1, 5, 10]
+            n_batches = 50 if not quick else 20
+
+            print(f"\n  Running batch sweep for both oracle and auto...")
+
+            # Per-question first
+            for label, qs in [("oracle", q_oracle), ("auto", q_auto)]:
+                for nb in bank_configs:
+                    model.set_bank_mode(nb if nb > 0 else 1)
+                    p1 = run_phase1_per_question(
+                        model, tokenizer, qs, use_banks=(nb > 0))
+                    print(f"  Per-question ({label}, banks={nb}): "
+                          f"e2e={p1['end_to_end']:.1f}%")
+
+            results_oracle = run_batch_sweep(
+                model, tokenizer, q_oracle,
+                batch_sizes=batch_sizes, n_batches=n_batches,
+                bank_configs=bank_configs)
+            results_auto = run_batch_sweep(
+                model, tokenizer, q_auto,
+                batch_sizes=batch_sizes, n_batches=n_batches,
+                bank_configs=bank_configs)
+
+            model.set_bank_mode(1)
+            return {"oracle": results_oracle, "auto": results_auto,
+                    "bridge_agreement": agree / max(len(shared_keys), 1) * 100,
+                    "n_shared": len(shared_keys)}
+
+        results_oracle = _run_single(
+            model, tokenizer, q_oracle, phase, batch_size,
+            use_banks, label="ORACLE")
+        results_auto = _run_single(
+            model, tokenizer, q_auto, phase, batch_size,
+            use_banks, label="AUTO (non-oracle)")
+
+        # Summary comparison
+        print(f"\n{'='*60}")
+        print(f"COMPARISON SUMMARY")
+        print(f"{'='*60}")
+
+        if "phase1" in results_oracle and "phase1" in results_auto:
+            po = results_oracle["phase1"]
+            pa = results_auto["phase1"]
+            print(f"  Per-question (oracle):  e2e={po['end_to_end']:.1f}%  "
+                  f"({po['total']} questions)")
+            print(f"  Per-question (auto):    e2e={pa['end_to_end']:.1f}%  "
+                  f"({pa['total']} questions)")
+            diff = pa['end_to_end'] - po['end_to_end']
+            print(f"  Difference:             {diff:+.1f}pp")
+
+        if "phase2" in results_oracle and "phase2" in results_auto:
+            po = results_oracle["phase2"]
+            pa = results_auto["phase2"]
+            print(f"  Batched (oracle):       e2e={po['end_to_end']:.1f}%  "
+                  f"(bs={po['batch_size']})")
+            print(f"  Batched (auto):         e2e={pa['end_to_end']:.1f}%  "
+                  f"(bs={pa['batch_size']})")
+
+        return {"oracle": results_oracle, "auto": results_auto,
+                "bridge_agreement": agree / max(len(shared_keys), 1) * 100,
+                "n_shared": len(shared_keys)}
+
+    # Single mode
+    questions = load_hotpot_questions(
+        tokenizer, max_questions=n_questions, oracle=oracle)
+    mode = "oracle" if oracle else "auto"
+    results = _run_single(
+        model, tokenizer, questions, phase, batch_size,
+        use_banks, label=mode.upper())
+
     # Summary
     print(f"\n{'='*60}")
-    print(f"SUMMARY")
+    print(f"SUMMARY ({mode})")
     print(f"{'='*60}")
 
     if "phase1" in results:
@@ -615,6 +936,15 @@ def main():
     parser.add_argument("--batch-size", type=int, default=5)
     parser.add_argument("--banks", type=int, default=0,
                         help="Enable hashed trace banks (0=disabled)")
+    parser.add_argument("--no-oracle", action="store_true",
+                        help="Use auto bridge detection (no supporting_facts)")
+    parser.add_argument("--compare", action="store_true",
+                        help="Run both oracle and auto, compare results")
+    parser.add_argument("--batch-sweep", action="store_true",
+                        help="Sweep batch sizes [1,3,5,8,10,15]")
+    parser.add_argument("--bank-configs", type=int, nargs='+',
+                        default=None,
+                        help="Bank configs for sweep (e.g., 0 32 64)")
     args = parser.parse_args()
 
     run_experiment(
@@ -623,6 +953,10 @@ def main():
         batch_size=args.batch_size,
         n_banks=args.banks,
         quick=args.quick,
+        oracle=not args.no_oracle,
+        compare=args.compare,
+        batch_sweep=args.batch_sweep,
+        bank_configs=args.bank_configs,
     )
 
 

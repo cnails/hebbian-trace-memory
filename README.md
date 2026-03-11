@@ -115,7 +115,7 @@ answer = model.retrieve_direct(answer_id, candidate_ids)   # hop 2
 ```bash
 python evaluate.py --n-eval 100        # Multi-session flagship (Table 4)
 python exp_lama.py --n-eval 100        # LAMA T-REx benchmark (Table 6)
-python exp_multihop.py --quick         # Multi-hop HotpotQA (Table 8)
+python -m hebbian_trace.experiments.exp27_hotpotqa --no-oracle --batch-sweep --bank-configs 0 32  # Multi-hop HotpotQA (Table 8)
 python exp_paraphrase.py --n-eval 50   # Paraphrase resolution (Table 9)
 python capacity_test.py --banks 16     # Capacity with hashed banks
 ```
@@ -181,22 +181,22 @@ Facts stored in one phrasing, queried with another. This is the core test of con
 
 *kNN-LM degrades to near-baseline because contextual hidden states diverge when phrasing changes. The trace addresses by token identity — phrasing-invariant by design.*
 
-### HotpotQA Multi-Hop (4,878 Bridge Questions)
+### HotpotQA Multi-Hop (4,159 Bridge Questions, Non-Oracle)
 
-Real-world 2-hop retrieval. Oracle-supported: supporting facts provided, first BPE token answer match. Not comparable to end-to-end QA leaderboard entries.
+Real-world 2-hop retrieval **without oracle support**: bridge entities identified automatically from context paragraphs (no supporting fact annotations). First BPE token answer match. Not comparable to end-to-end QA leaderboard entries.
 
 <p align="center">
   <img src="figures/multihop_capacity.png" width="600" alt="Multi-hop retrieval scaling">
 </p>
 
-| Mode | N | Hop-1 | E2E (no banks) | E2E (best-bank, 16 banks) |
-|------|:-:|:-----:|:--------------:|:-------------------------:|
-| Per-question | 1 | 100% | **100%** (4,878/4,878) | --- |
-| Batched | 5 | 100% | 99.6% | **99.6%** |
-| Batched | 10 | 96.6% | 90.8% | **98.8%** |
-| Batched | 15 | 81.9% | 67.6% | **98.7%** |
+| Mode | N | E2E (no banks) | E2E (32 banks + best-bank) |
+|------|:-:|:--------------:|:--------------------------:|
+| Per-question | 1 | **100%** (4,159/4,159) | **100%** |
+| Batched | 5 | 98.0% | **100%** |
+| Batched | 10 | 88.2% | **98.8%** |
+| Batched | 15 | 62.7% | **98.7%** |
 
-*71.0% of bridge entities share a first BPE token (e.g., "The"), causing hop-2 collisions. Best-bank scan resolves this: +31pp at batch 15.*
+*Auto bridge detection agrees with oracle on 94.6% of shared questions. 32 banks + best-bank scan (no oracle at read time) resolves first-token collisions: +36pp at batch 15.*
 
 ### LAMA T-REx (2,034 Wikidata Facts)
 
